@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0b0e12">
+  <meta name="description" content="Download ClearFeed for Android — messages without the endless feed.">
+  <title>ClearFeed for Android</title>
+  <style>
+    :root { color-scheme: dark; --bg:#080a0d; --card:#11151b; --line:#242b35; --text:#f7f8fa; --muted:#aab3c0; --green:#64e8ab; }
+    * { box-sizing:border-box }
+    body { margin:0; min-height:100vh; font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; background:radial-gradient(circle at 50% -10%,#17342d 0,transparent 37%),var(--bg); color:var(--text); }
+    main { width:min(100% - 32px,720px); margin:auto; padding:56px 0 36px; }
+    .brand { display:flex; align-items:center; gap:12px; font-weight:800; letter-spacing:-.02em; }
+    .mark { display:grid; place-items:center; width:38px; height:38px; border-radius:12px; background:var(--green); color:#07120d; font-size:21px; }
+    .hero { padding:64px 0 34px; }
+    .pill { display:inline-flex; padding:7px 11px; border:1px solid #315849; border-radius:99px; color:#baf9dc; background:#10251d; font-size:13px; font-weight:700; }
+    h1 { margin:20px 0 16px; max-width:660px; font-size:clamp(42px,9vw,72px); line-height:.98; letter-spacing:-.06em; }
+    .lead { margin:0; max-width:590px; color:var(--muted); font-size:clamp(18px,4vw,21px); line-height:1.55; }
+    .download { display:inline-flex; justify-content:center; align-items:center; width:100%; min-height:58px; margin-top:30px; border-radius:16px; background:var(--green); color:#06110c; font-size:17px; font-weight:850; text-decoration:none; box-shadow:0 14px 42px #1ba86a35; }
+    .download:active { transform:translateY(1px); }
+    .meta { margin:13px 0 0; color:#788392; text-align:center; font-size:13px; }
+    .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:44px; }
+    .card { padding:22px; border:1px solid var(--line); border-radius:20px; background:linear-gradient(145deg,#141920,#0e1217); }
+    .number { color:var(--green); font-size:13px; font-weight:800; }
+    h2 { margin:10px 0 7px; font-size:17px; }
+    .card p { margin:0; color:var(--muted); font-size:14px; line-height:1.5; }
+    .notice { margin-top:30px; padding:17px 18px; border:1px solid #4c4121; border-radius:16px; background:#201b0e; color:#e8ddb6; font-size:14px; line-height:1.55; }
+    footer { display:flex; justify-content:space-between; gap:16px; margin-top:48px; padding-top:20px; border-top:1px solid var(--line); color:#788392; font-size:13px; }
+    footer a { color:#9ca8b7; }
+    @media (max-width:600px) { main{padding-top:28px}.hero{padding-top:48px}.grid{grid-template-columns:1fr}.card{padding:18px}footer{flex-direction:column} }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand"><span class="mark">C</span> ClearFeed</div>
+    <section class="hero">
+      <span class="pill">Android personal test build</span>
+      <h1>Messages without the endless feed.</h1>
+      <p class="lead">A focused Android browser for Instagram, Facebook and YouTube that keeps conversations accessible while blocking distracting feeds.</p>
+      <a class="download" href="/downloads/ClearFeed.apk" download>Download ClearFeed APK</a>
+      <p class="meta">Version 3.6.3-debug · 11.4 MB · Android APK</p>
+    </section>
+    <section class="grid" aria-label="Install steps">
+      <article class="card"><span class="number">01</span><h2>Download</h2><p>Open this page on your phone and tap the green button.</p></article>
+      <article class="card"><span class="number">02</span><h2>Allow install</h2><p>If Android asks, allow your browser to install this one unknown app.</p></article>
+      <article class="card"><span class="number">03</span><h2>Open ClearFeed</h2><p>Install the APK, open it, then sign in to the services you use.</p></article>
+    </section>
+    <div class="notice"><strong>Expected Android warning:</strong> this is a directly installed debug APK, not a Play Store release. Android may warn that the source is unknown. Only install the file from this ClearFeed page.</div>
+    <footer><span>ClearFeed · Personal build</span><span><a href="/privacy.html">Privacy</a> · <a href="https://github.com/Tuvshee555/ClearFeed">Source on GitHub</a></span></footer>
+  </main>
+</body>
+</html>

@@ -12,5 +12,6 @@ captures/
 *.keystore
 *.apk
 *.aab
+!public/downloads/ClearFeed.apk
 keystore.properties
 /.tooling/
