@@ -20,6 +20,7 @@ import dev.directonly.app.diagnostics.DiagnosticEnvironment
 import dev.directonly.app.diagnostics.DiagnosticRecord
 import dev.directonly.app.diagnostics.buildDiagnosticReport
 import dev.directonly.app.diagnostics.privacySafeLocation
+import dev.directonly.app.diagnostics.RemoteDiagnosticsReporter
 import dev.directonly.app.diagnostics.safeDiagnosticDetail
 import dev.directonly.app.model.AppState
 import dev.directonly.app.model.NavigationDecision
@@ -73,6 +74,7 @@ class ClearFeedCoordinator(
     var webViewAvailable by mutableStateOf(true)
         private set
     private var lastDiagnostic by mutableStateOf<DiagnosticRecord?>(null)
+    private val remoteDiagnostics = RemoteDiagnosticsReporter.create(context)
 
     private val lastSafeUrls = SocialPlatform.entries.associateWith {
         policies.forPlatform(it).safeRootUrl
@@ -839,12 +841,14 @@ class ClearFeedCoordinator(
     }
 
     private fun recordDiagnostic(code: String, detail: String, url: String?) {
-        lastDiagnostic = DiagnosticRecord(
+        val record = DiagnosticRecord(
             code = code,
             service = selectedPlatform?.displayName ?: "App startup",
             location = privacySafeLocation(url),
             detail = safeDiagnosticDetail(detail),
         )
+        lastDiagnostic = record
+        remoteDiagnostics.report(record)
     }
 
     private fun diagnosticRouteShape(url: String): String {

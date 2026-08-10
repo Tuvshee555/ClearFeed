@@ -22,8 +22,8 @@ android {
         applicationId = "dev.directonly.app"
         minSdk = 24
         targetSdk = 36
-        versionCode = 18
-        versionName = "3.6.3"
+        versionCode = 19
+        versionName = "3.6.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
