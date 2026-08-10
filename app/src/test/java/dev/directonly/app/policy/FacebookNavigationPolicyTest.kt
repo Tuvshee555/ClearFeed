@@ -43,13 +43,22 @@ class FacebookNavigationPolicyTest {
     @Test
     fun `ranked Home is blocked in favor of verified newest Feeds`() {
         listOf(
-            "https://www.facebook.com/",
             "https://www.facebook.com/home.php",
             "https://www.facebook.com/?sk=nf",
             "https://www.facebook.com/?filter=all",
             "https://www.facebook.com/?filter=unknown&sk=h_chr",
             "https://www.facebook.com/?_rdr&next=/reels/",
         ).forEach(::assertBlocked)
+        val canonicalPostLoginFeed = policy.evaluate(
+            "https://www.facebook.com/",
+            PolicyMode.CONTENT,
+        )
+        assertEquals(NavigationDisposition.ALLOW_CONTENT, canonicalPostLoginFeed.disposition)
+        assertEquals(RouteKind.FACEBOOK_FEED, canonicalPostLoginFeed.routeKind)
+        assertEquals(
+            NavigationDisposition.BLOCK,
+            policy.evaluate("https://www.facebook.com/", PolicyMode.AUTHENTICATING).disposition,
+        )
         assertEquals(
             "https://m.facebook.com/?filter=all&sk=h_chr",
             policy.safeRootUrl,

@@ -61,6 +61,12 @@ class FacebookNavigationPolicy : PlatformNavigationPolicy {
             path == "/" && isRedirectedLoginQuery(normalized.query) -> allowedAuth(normalized)
             path == "/" && isNewestFeedsQuery(normalized.query) ->
                 allowedContent(RouteKind.FACEBOOK_FEED, normalized)
+            // Facebook mobile canonicalizes the verified newest-feed URL back to `/`
+            // after authentication. In content mode the guard still enforces the
+            // eight-post limit, so accepting that canonical route prevents an
+            // endless `/` -> filtered feed -> `/` recovery loop.
+            path == "/" && normalized.query.isNullOrBlank() && mode == PolicyMode.CONTENT ->
+                allowedContent(RouteKind.FACEBOOK_FEED, normalized)
             path == "/" || path == "/home.php/" ->
                 blocked(RouteKind.BLOCKED_FACEBOOK_CONTENT, BlockReason.FACEBOOK_CONTENT)
             path == "/messages/" || path.startsWith("/messages/t/") ||

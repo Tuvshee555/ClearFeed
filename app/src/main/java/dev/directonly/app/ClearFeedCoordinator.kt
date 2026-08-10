@@ -229,7 +229,10 @@ class ClearFeedCoordinator(
             }
             is BridgeEvent.BlockedNavigation -> {
                 val candidate = trustedUrlForPath(view, event.path)
-                if (selectedPlatform == SocialPlatform.FACEBOOK &&
+                val decision = currentPolicy().evaluate(candidate, policyMode, navigationContext())
+                if (completeInstagramAuthentication(view, candidate, decision)) {
+                    Unit
+                } else if (selectedPlatform == SocialPlatform.FACEBOOK &&
                     sameNormalizedLocation(candidate, view.url ?: candidate)
                 ) {
                     recoverToSafeRoot(view)
@@ -423,6 +426,7 @@ class ClearFeedCoordinator(
         userGesture: Boolean,
     ) {
         trace("blocked view=${System.identityHashCode(view)} route=${decision.routeKind} shape=${diagnosticRouteShape(url)} gesture=$userGesture")
+        if (completeInstagramAuthentication(view, url, decision)) return
         if (userGesture) {
             handleLinkCandidate(view, url, userGesture = true)
         } else {
@@ -703,6 +707,36 @@ class ClearFeedCoordinator(
         view.postDelayed({ if (notice != null) notice = null }, NOTICE_DURATION_MS)
         val currentDecision = currentPolicy().evaluate(view.url, policyMode, navigationContext())
         if (!currentDecision.mayLoadInWebView) recoverToSafeRoot(view)
+    }
+
+    private fun completeInstagramAuthentication(
+        view: WebView,
+        url: String,
+        decision: NavigationDecision,
+    ): Boolean {
+        if (selectedPlatform != SocialPlatform.INSTAGRAM ||
+            policyMode != PolicyMode.AUTHENTICATING ||
+            decision.routeKind != RouteKind.BLOCKED_INSTAGRAM_CONTENT
+        ) return false
+        val normalized = (UrlNormalizer.normalize(url) as? UrlNormalizationResult.Valid)?.value
+            ?: return false
+        if (normalized.host !in setOf("instagram.com", "www.instagram.com") || normalized.path != "/") {
+            return false
+        }
+        view.alpha = 0f
+        view.stopLoading()
+        appState = AppState.STARTING
+        isLoading = true
+        webContentReady = false
+        policyMode = PolicyMode.DIRECT
+        pendingHistoryClear = true
+        recordDiagnostic(
+            code = "CF-STAGE-AUTH-COMPLETE",
+            detail = "Instagram authentication completed; opening Direct inbox",
+            url = url,
+        )
+        navigator.openSafeRoot(view)
+        return true
     }
 
     private fun recoverToSafeRoot(view: WebView) {
