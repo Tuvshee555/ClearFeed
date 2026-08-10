@@ -1,0 +1,32 @@
+html[data-clearfeed-blocked="true"] {
+    visibility: hidden !important;
+    background: #f7f8fa !important;
+}
+
+[data-clearfeed-hidden="true"],
+ytm-reel-shelf-renderer,
+ytm-shorts-lockup-view-model,
+ytm-pivot-bar-item-renderer:has(.pivot-shorts),
+.pivot-shorts,
+a[href^="/shorts/"],
+a[href="/"],
+a[href^="/feed/trending"],
+ytm-comments-entry-point-header-renderer,
+ytm-comment-section-renderer,
+ytm-autoplay-bar-renderer,
+.ytp-autonav-toggle-button,
+.ytp-endscreen-content,
+.ytp-ce-element {
+    display: none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
+
+body[data-clearfeed-youtube-route="watch"] ytm-single-column-watch-next-results-renderer ytm-video-with-context-renderer,
+body[data-clearfeed-youtube-route="watch"] ytm-single-column-watch-next-results-renderer ytm-reel-shelf-renderer,
+body[data-clearfeed-youtube-route="watch"] ytm-item-section-renderer[section-identifier="related-items"],
+body[data-clearfeed-youtube-route="watch"] ytm-compact-video-renderer {
+    display: none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+}

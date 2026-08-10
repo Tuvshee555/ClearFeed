@@ -1,0 +1,65 @@
+/* ClearFeed Instagram guard: Direct plus one exact DM-authorized shared item. */
+html[data-directonly-blocked="true"] {
+    visibility: hidden !important;
+    background: #f7f8fa !important;
+}
+
+[data-directonly-hidden="true"],
+[data-directonly-sealed-hidden="true"] {
+    display: none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
+
+html:not([data-directonly-route="auth"]) a[href="/"],
+html:not([data-directonly-route="auth"]) a[href^="/explore/"],
+html:not([data-directonly-route="auth"]) a[href^="/stories/"],
+html:not([data-directonly-route="auth"]) a[href^="/tags/"],
+html:not([data-directonly-route="auth"]) a[href^="/locations/"],
+html:not([data-directonly-route="auth"]) a[href^="/accounts/activity/"],
+html:not([data-directonly-route="auth"]) a[href^="/shopping/"] {
+    display: none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
+
+html:not([data-directonly-route="direct-thread"]):not([data-directonly-route="shared"]) a[href^="/reel/"],
+html:not([data-directonly-route="direct-thread"]):not([data-directonly-route="shared"]) a[href^="/reels/"],
+html:not([data-directonly-route="direct-thread"]):not([data-directonly-route="shared"]) a[href^="/p/"] {
+    display: none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
+
+html[data-directonly-route="shared"] body {
+    overscroll-behavior: none !important;
+}
+
+html[data-directonly-route="shared"] [data-directonly-sealed-stream="true"] {
+    overflow-y: hidden !important;
+    overscroll-behavior: none !important;
+    touch-action: pan-x !important;
+}
+
+html[data-directonly-route="shared"] [aria-label*="comment" i],
+html[data-directonly-route="shared"] a[href*="/comments/"],
+html[data-directonly-route="shared"] main ul,
+html[data-directonly-route="shared"] main form,
+html[data-directonly-route="shared"] main textarea,
+html[data-directonly-route="shared"] main [contenteditable="true"] {
+    display: none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
+
+.directonly-shared-hidden {
+    display: block;
+    padding: 10px 12px;
+    margin: 4px 0;
+    border: 1px solid rgba(128, 128, 128, 0.28);
+    border-radius: 10px;
+    color: inherit;
+    font: inherit;
+    font-size: 0.9em;
+    opacity: 0.72;
+}

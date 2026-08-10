@@ -1,0 +1,45 @@
+html[data-clearfeed-blocked="true"] {
+    visibility: hidden !important;
+    background: #f7f8fa !important;
+}
+
+[data-clearfeed-hidden="true"],
+a[href^="/reel/"],
+a[href^="/reels/"],
+a[href^="/watch/"],
+a[href^="/watch.php"],
+a[href^="/video.php"],
+a[href^="/videos/"],
+a[href^="/stories/"],
+a[href^="/marketplace/"],
+a[href^="/gaming/"] {
+    display: none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
+
+html:not([data-clearfeed-facebook-route="messages"]) video {
+    display: none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
+
+.clearfeed-feed-end {
+    box-sizing: border-box;
+    max-width: 680px;
+    margin: 18px auto 42px;
+    padding: 22px 18px;
+    border: 1px solid rgba(128, 128, 128, 0.28);
+    border-radius: 14px;
+    background: Canvas;
+    color: CanvasText;
+    text-align: center;
+    font: 600 16px/1.45 system-ui, sans-serif;
+}
+
+.clearfeed-feed-end small {
+    display: block;
+    margin-top: 8px;
+    font-weight: 400;
+    opacity: 0.74;
+}
