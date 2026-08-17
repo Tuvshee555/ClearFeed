@@ -15,3 +15,5 @@ captures/
 !public/downloads/ClearFeed.apk
 keystore.properties
 /.tooling/
+node_modules/
+package-lock.json

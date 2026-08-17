@@ -18,6 +18,7 @@ import androidx.core.net.toUri
 import androidx.webkit.WebViewCompat
 import dev.directonly.app.diagnostics.DiagnosticEnvironment
 import dev.directonly.app.diagnostics.DiagnosticRecord
+import dev.directonly.app.diagnostics.DiagnosticsPreferences
 import dev.directonly.app.diagnostics.buildDiagnosticReport
 import dev.directonly.app.diagnostics.privacySafeLocation
 import dev.directonly.app.diagnostics.RemoteDiagnosticsReporter
@@ -37,9 +38,11 @@ import dev.directonly.app.policy.PlatformNavigationPolicy
 import dev.directonly.app.policy.PlatformPolicyRegistry
 import dev.directonly.app.policy.ProtectedLinkDecision
 import dev.directonly.app.policy.ProtectedSocialLinkRouter
+import dev.directonly.app.policy.ProtectedSurfaceGate
 import dev.directonly.app.policy.UrlNormalizationResult
 import dev.directonly.app.policy.UrlNormalizer
 import dev.directonly.app.web.BridgeEvent
+import dev.directonly.app.web.GuardDeadline
 import dev.directonly.app.web.ProtectedNavigator
 import dev.directonly.app.web.ProtectedWebChromeClient
 import dev.directonly.app.web.ProtectedWebViewClient
@@ -74,7 +77,17 @@ class ClearFeedCoordinator(
     var webViewAvailable by mutableStateOf(true)
         private set
     private var lastDiagnostic by mutableStateOf<DiagnosticRecord?>(null)
-    private val remoteDiagnostics = RemoteDiagnosticsReporter.create(context)
+    private val diagnosticsPreferences = DiagnosticsPreferences(context)
+    private val remoteDiagnostics = RemoteDiagnosticsReporter.create(context, diagnosticsPreferences)
+
+    /** Off by default. Only failures are ever sent, and only while this is on. */
+    var remoteDiagnosticsEnabled by mutableStateOf(diagnosticsPreferences.remoteReportingEnabled)
+        private set
+
+    fun updateRemoteDiagnostics(enabled: Boolean) {
+        diagnosticsPreferences.remoteReportingEnabled = enabled
+        remoteDiagnosticsEnabled = enabled
+    }
 
     private val lastSafeUrls = SocialPlatform.entries.associateWith {
         policies.forPlatform(it).safeRootUrl
@@ -90,8 +103,18 @@ class ClearFeedCoordinator(
     private var allowedYouTubeVideoId: String? = null
     private val instagramSharedContentSession = InstagramSharedContentSession(SystemClock::elapsedRealtime)
     private var pendingHistoryClear = false
-    private var guardTimeout: Runnable? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val guardDeadline = GuardDeadline<WebView>(
+        timeoutMs = GUARD_TIMEOUT_MS,
+        scheduler = object : GuardDeadline.Scheduler {
+            override fun post(delayMs: Long, task: () -> Unit): Any =
+                Runnable(task).also { mainHandler.postDelayed(it, delayMs) }
+
+            override fun cancel(handle: Any) {
+                (handle as? Runnable)?.let(mainHandler::removeCallbacks)
+            }
+        },
+    )
     private var pendingLoadOnAttach: Pair<WebView, View.OnAttachStateChangeListener>? = null
     private val crossPlatformOrigins = CrossPlatformNavigationStack()
     private var pendingPlatformEntry: PendingPlatformEntry? = null
@@ -187,14 +210,29 @@ class ClearFeedCoordinator(
             view.removeOnAttachStateChangeListener(listener)
             pendingLoadOnAttach = null
         }
+        // Cancel by view identity, not by whether this is still the active view. On a
+        // platform switch the new view is attached before the old one is released, so a
+        // `webView === view` guard left the stale deadline queued on the main Looper,
+        // holding a destroyed WebView for up to 12s and blocking the new view's watchdog.
+        guardDeadline.cancelIfOwnedBy(view)
         if (webView === view) {
-            cancelGuardTimeout(view)
             chromeClient?.clearActivePermissionRequest()
             chromeClient = null
             webView = null
         }
         view.stopLoading()
         view.destroy()
+    }
+
+    fun ownsWebView(view: WebView): Boolean = webView === view
+
+    /** Releases coordinator-owned resources. WebView teardown is the composition's job. */
+    fun onDestroy() {
+        guardDeadline.cancel()
+        mainHandler.removeCallbacksAndMessages(null)
+        pendingLoadOnAttach?.let { (view, listener) -> view.removeOnAttachStateChangeListener(listener) }
+        pendingLoadOnAttach = null
+        remoteDiagnostics.close()
     }
 
     fun markWebViewUnavailable() {
@@ -208,6 +246,10 @@ class ClearFeedCoordinator(
             url = null,
         )
     }
+
+    /** Changes whenever a new diagnostic lands, so the UI can re-derive its report. */
+    val lastDiagnosticCode: String?
+        get() = lastDiagnostic?.let { "${it.code}|${it.location}" }
 
     fun diagnosticReport(): String = buildDiagnosticReport(
         environment = DiagnosticEnvironment(
@@ -256,7 +298,7 @@ class ClearFeedCoordinator(
                 ) {
                     policyMode = PolicyMode.AUTHENTICATING
                     appState = AppState.AUTHENTICATING
-                    cancelGuardTimeout(view)
+                    guardDeadline.cancel()
                     view.alpha = 1f
                     isLoading = false
                     webContentReady = true
@@ -284,7 +326,7 @@ class ClearFeedCoordinator(
                             url = actualUrl,
                         )
                     }
-                    cancelGuardTimeout(view)
+                    guardDeadline.cancel()
                     updateAllowedState(actualUrl, decision)
                     view.alpha = 1f
                     isLoading = false
@@ -311,7 +353,11 @@ class ClearFeedCoordinator(
         appState = AppState.STARTING
         isLoading = true
         webContentReady = false
+        // A retry is a fresh attempt and deserves a full deadline, not the remainder of
+        // one that already expired.
+        guardDeadline.cancel()
         navigator.retry(view, lastSafeUrls[platform])
+        scheduleGuardTimeout(view)
     }
 
     fun resetAllSessions() {
@@ -322,6 +368,11 @@ class ClearFeedCoordinator(
         webContentReady = false
         appState = AppState.STARTING
         sessionManager.resetAll(view) {
+            // This continuation is deferred until CookieManager finishes, by which time the
+            // user may have gone Home or switched services. Without these checks
+            // currentPolicy()'s requireNotNull(selectedPlatform) throws, or loadUrl runs on
+            // an already-destroyed WebView.
+            if (webView !== view || selectedPlatform == null) return@resetAll
             policyMode = PolicyMode.AUTHENTICATING
             currentUrl = null
             allowedYouTubeVideoId = null
@@ -337,17 +388,12 @@ class ClearFeedCoordinator(
 
     fun isMessagePageActive(): Boolean {
         val platform = selectedPlatform ?: return false
-        val decision = policies.forPlatform(platform).evaluate(
-            webView?.url,
-            PolicyMode.CONTENT,
-            navigationContext(),
-        )
-        return decision.routeKind in setOf(
-            RouteKind.DIRECT_INBOX,
-            RouteKind.DIRECT_THREAD,
-            RouteKind.DIRECT_REQUESTS,
-            RouteKind.DIRECT_NEW,
-            RouteKind.FACEBOOK_MESSAGES,
+        return ProtectedSurfaceGate.isMessageSurface(
+            policies.forPlatform(platform).evaluate(
+                webView?.url,
+                PolicyMode.CONTENT,
+                navigationContext(),
+            ),
         )
     }
 
@@ -356,10 +402,9 @@ class ClearFeedCoordinator(
 
     fun isFullscreenAllowed(): Boolean {
         if (isMessagePageActive()) return true
-        val route = currentPolicy().evaluate(webView?.url, policyMode, navigationContext()).routeKind
-        return route == RouteKind.YOUTUBE_WATCH ||
-            route == RouteKind.INSTAGRAM_SHARED_REEL ||
-            route == RouteKind.INSTAGRAM_SHARED_POST
+        return ProtectedSurfaceGate.isFullscreenSurface(
+            currentPolicy().evaluate(webView?.url, policyMode, navigationContext()),
+        )
     }
 
     fun handleBack(exit: () -> Unit) {
@@ -704,7 +749,11 @@ class ClearFeedCoordinator(
             SocialPlatform.YOUTUBE -> "ClearFeed keeps YouTube intentional and Shorts-free"
             SocialPlatform.FACEBOOK -> "ClearFeed blocks Facebook video and discovery surfaces"
         }
-        view.postDelayed({ if (notice != null) notice = null }, NOTICE_DURATION_MS)
+        // Posted to the coordinator's own handler, not the view's. A WebView that is
+        // detached or destroyed before the delay elapses drops its queued work, which
+        // left the notice on screen permanently.
+        val shown = notice
+        mainHandler.postDelayed({ if (notice === shown) notice = null }, NOTICE_DURATION_MS)
         val currentDecision = currentPolicy().evaluate(view.url, policyMode, navigationContext())
         if (!currentDecision.mayLoadInWebView) recoverToSafeRoot(view)
     }
@@ -774,28 +823,26 @@ class ClearFeedCoordinator(
     }
 
     private fun scheduleGuardTimeout(view: WebView) {
-        // Redirects and repeated callbacks must not extend loading forever.
-        if (guardTimeout != null) return
-        val timeout = Runnable {
-            trace("guard-timeout-fired view=${System.identityHashCode(view)} active=${webView === view} ready=$webContentReady")
-            if (!webContentReady && webView === view) {
-                view.alpha = 0f
-                isLoading = false
-                appState = AppState.WEB_ERROR
-                instagramSharedContentSession.clear()
-                val service = selectedPlatform?.displayName ?: "The service"
-                recordDiagnostic(
-                    code = "CF-GUARD-TIMEOUT",
-                    detail = "The protected interface did not report healthy within ${GUARD_TIMEOUT_MS}ms",
-                    url = view.url,
-                )
-                errorMessage =
-                    "ClearFeed couldn't verify $service's protected interface. " +
-                        "Error CF-GUARD-TIMEOUT. Open Diagnostics for details."
-            }
+        guardDeadline.schedule(view, ::fireGuardTimeout)
+    }
+
+    private fun fireGuardTimeout(view: WebView) {
+        trace("guard-timeout-fired view=${System.identityHashCode(view)} active=${webView === view} ready=$webContentReady")
+        if (!webContentReady && webView === view) {
+            view.alpha = 0f
+            isLoading = false
+            appState = AppState.WEB_ERROR
+            instagramSharedContentSession.clear()
+            val service = selectedPlatform?.displayName ?: "The service"
+            recordDiagnostic(
+                code = "CF-GUARD-TIMEOUT",
+                detail = "The protected interface did not report healthy within ${GUARD_TIMEOUT_MS}ms",
+                url = view.url,
+            )
+            errorMessage =
+                "ClearFeed couldn't verify $service's protected interface. " +
+                    "Error CF-GUARD-TIMEOUT. Open Diagnostics for details."
         }
-        guardTimeout = timeout
-        mainHandler.postDelayed(timeout, GUARD_TIMEOUT_MS)
     }
 
     private fun dispatchWhenAttached(view: WebView, action: () -> Unit) {
@@ -820,10 +867,6 @@ class ClearFeedCoordinator(
         view.addOnAttachStateChangeListener(listener)
     }
 
-    private fun cancelGuardTimeout(view: WebView) {
-        guardTimeout?.let(mainHandler::removeCallbacks)
-        guardTimeout = null
-    }
 
     private fun hasProvablySafePreviousEntry(view: WebView): Boolean {
         val history = view.copyBackForwardList()
@@ -849,22 +892,6 @@ class ClearFeedCoordinator(
         RouteKind.YOUTUBE_SUBSCRIPTIONS,
         RouteKind.FACEBOOK_FEED,
     )
-
-    private fun isAuthenticationRoute(kind: RouteKind): Boolean = kind in setOf(
-        RouteKind.AUTH_LOGIN,
-        RouteKind.AUTH_CHALLENGE,
-        RouteKind.AUTH_RECOVERY,
-        RouteKind.AUTH_CONSENT,
-    )
-
-    private fun isFacebookRedirectedLogin(url: String): Boolean {
-        if (selectedPlatform != SocialPlatform.FACEBOOK) return false
-        val normalized = (UrlNormalizer.normalize(url) as? UrlNormalizationResult.Valid)?.value
-            ?: return false
-        return normalized.path == "/" && normalized.query.orEmpty().split('&')
-            .map { it.substringBefore('=') }
-            .let { keys -> "_rdr" in keys && keys.all { it == "_rdr" || it == "__mmr" } }
-    }
 
     private fun sameNormalizedLocation(first: String, second: String): Boolean {
         val one = (UrlNormalizer.normalize(first) as? UrlNormalizationResult.Valid)?.value

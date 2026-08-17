@@ -2,26 +2,78 @@
 
 ## Automated verification
 
-Run the complete local gate:
+CI runs this gate on every push and pull request — see
+[`.github/workflows/verify.yml`](.github/workflows/verify.yml). To run it locally:
+
+```bash
+# Linux / macOS
+export JAVA_HOME=/path/to/jdk-17
+export ANDROID_SDK_ROOT="$HOME/Android/Sdk"
+./gradlew testDebugUnitTest lintDebug assembleDebug assembleRelease
+npm install                        # jsdom, for the guard DOM suite
+node tools/check-guard-syntax.js
+node tools/guard-fixture-tests.js
+node tools/guard-dom-tests.js
+```
 
 ```powershell
+# Windows
 $env:JAVA_HOME = 'C:\Program Files\Microsoft\jdk-17.0.20.8-hotspot'
 $env:ANDROID_SDK_ROOT = "$env:LOCALAPPDATA\Android\Sdk"
 .\gradlew.bat testDebugUnitTest lintDebug assembleDebug assembleRelease --no-daemon
-node tools/guard-fixture-tests.js
+npm install
 node tools/check-guard-syntax.js
+node tools/guard-fixture-tests.js
+node tools/guard-dom-tests.js
 ```
 
-The JVM suite covers:
+`gradlew` must stay committed as mode `100755`. It was once committed `100644`, which made
+`./gradlew` fail with `Permission denied` on every non-Windows machine; CI now asserts the
+committed mode explicitly. If it is ever lost again:
+`git update-index --chmod=+x gradlew`.
 
-- Instagram Direct and narrow authentication routes; exact DM-originated Reel/post identity and nonce binding; manual/profile/Explore/recommendation origin denial; one-hop route sealing; session expiry/Back/process recreation; every known content escape, unknown route, redirect and deceptive/encoded URL;
-- YouTube Subscriptions/Search, exact deliberate-video and cross-platform normal-video tokens, same-platform next-video denial, Home/Shorts/trending/playlist/channel rejection, Google authentication boundaries and managed-social escapes;
-- Facebook newest Feeds query/subfilters, ranked-Home denial, Messages/Search/Notifications/Friends/Pages/Groups/Events/post routes, every known Reel/Story/video/live/Marketplace/Gaming path, unknown routes, auth boundaries and deceptive hosts;
-- centralized protected-domain boundaries, Instagram/Facebook/YouTube outbound-wrapper unwrapping, every directional platform handoff, Shorts/Facebook-video/Instagram-non-DM denial, crafted app/`intent:` schemes, genuine-tap requirements and volatile repeated-Back return order;
-- URL normalization, user info, explicit ports, malformed paths and unsafe encoding;
-- guard-source contracts for mutation enforcement, authenticated restricted-bridge use, absence of cookie/JavaScript-interface access, Instagram sealed-viewer controls, YouTube removal markers and Facebook's immutable eight-post marker/end card.
+### What each suite actually asserts
 
-The Node fixture suite also exercises Instagram trusted versus scripted DM taps, singular/plural canonical identity, different-item/nonce rejection, creator/audio/hashtag/comment/recommendation blocking, up/down swipe blocking, horizontal same-post carousel allowance, media-control allowance, preload rejection and stop-without-advance on video completion.
+**JVM suite (`app/src/test`)** — pure policy and diagnostics logic, no Android framework:
+
+- `DirectOnlyNavigationPolicyTest` — Instagram Direct and narrow authentication routes; exact DM-originated Reel/post identity and nonce binding; manual/profile/Explore/recommendation origin denial; one-hop route sealing; known content escapes, unknown routes, redirects and deceptive/encoded URLs; subframe scope.
+- `YouTubeNavigationPolicyTest` — Subscriptions/Search; the exact deliberate-video token; rejection of queued player modes (`list`, `start_radio`, `index`) on an otherwise authorized watch URL; Home/Shorts/trending/playlist/channel rejection; Google authentication boundaries; managed-social escapes.
+- `FacebookNavigationPolicyTest` — newest Feeds query and subfilters; ranked-Home denial; Messages/Search/Notifications/Friends/Pages/Groups/Events/post routes; known Reel/Story/video/live/Marketplace/Gaming paths **and their capitalized forms**; bare discovery directories (`/groups/`, `/events/`, `/pages/`, `/watch_videos/`, …); video search tabs; a signed-in Messenger root; unknown routes; deceptive hosts.
+- `ProtectedSocialLinkRouterTest` — protected-domain boundaries, outbound-wrapper unwrapping, directional platform handoffs, Shorts/Facebook-video/Instagram-non-DM denial, crafted app and `intent:` schemes, genuine-tap requirements.
+- `UrlNormalizerTest` — user info, explicit ports, malformed paths, unsafe encoding.
+- `CrossPlatformNavigationStackTest`, `InstagramSharedContentSessionTest` — repeated-Back return order, capability lifetime, process recreation.
+- `LocalDiagnosticsTest`, `RemoteDiagnosticsPolicyTest` — redaction of location and detail, and the two independent gates on outbound reporting (opt-in off by default; `CF-STAGE-*` never transmitted).
+- `GuardContractTest` — **source-level prohibitions only**: no cookie access, no `addJavascriptInterface`, no `eval`, no direct network calls, no storage or input-value reads, no bypass toggle, and the Facebook eight-post limit stated identically in Kotlin and in the guard rules.
+
+**Node decision-rule suite (`tools/guard-fixture-tests.js`)** — executes `guard_rules.js`
+directly: Instagram trusted versus scripted DM taps, the message-surface gate, canonical
+identity including kind confusion, nonce and canonical-path tampering, gesture thresholds,
+media-end handling; every YouTube link-decision return site; all ten Facebook unsafe href
+prefixes in relative, absolute and uppercase form; all five feed filters and their
+near-misses; the recommendation-text window; the eight-post counter and end-card transition.
+
+**Node DOM suite (`tools/guard-dom-tests.js`)** — boots each platform guard in jsdom the way
+`PlatformScriptInjector` does on a device, then asserts observable behaviour: `guard_ready`
+payload and version, stylesheet installation, route concealment per platform, Facebook
+case-insensitive classification, discovery-directory denial, the Instagram message-surface
+predicate, re-sanitation of an anchor whose `href` is swapped in place, and sanitation of
+every subtree in one mutation batch. It also enforces two cross-language contracts: every
+`__PLACEHOLDER__` in a guard is substituted by `PlatformScriptInjector`, and the set of
+event `type` literals the guards post exactly equals the arms the Kotlin bridge parses.
+
+### Known coverage gaps
+
+Stated plainly so the list above is not read as more than it is:
+
+- `ClearFeedCoordinator` has no direct tests. It owns the app state machine and depends on
+  `WebView`, `Handler` and `SystemClock`; testing it needs a seam that does not exist yet.
+  `ProtectedWebViewClient`, `ProtectedWebChromeClient`, `ProtectedNavigator`,
+  `PlatformScriptInjector` and `WebSessionManager` are likewise untested.
+- jsdom cannot synthesize a browser-trusted event (`isTrusted` is a non-configurable own
+  property), so the capability-minting path is verified through `sanitizeAnchor`'s
+  equivalent use of the same predicate rather than through a real tap. The positive
+  end-to-end mint remains a device test.
+- No instrumented (`androidTest`) suite exists; every device item below is still manual.
 
 ## Live inspection record
 

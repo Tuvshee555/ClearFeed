@@ -114,12 +114,16 @@ class MainActivity : ComponentActivity() {
         pendingFileCallback?.onReceiveValue(null)
         pendingFileCallback = null
         hideFullscreen()
-        if (isFinishing) injectors.keys.toList().forEach(::releaseProtectedWebView)
+        // Compose disposes its composition after onDestroy and runs AndroidView's
+        // onRelease, which routes to releaseProtectedWebView for the same instances.
+        // Releasing them here as well called stopLoading()/destroy() twice on one
+        // WebView. releaseProtectedWebView is now idempotent, so let the composition
+        // own WebView teardown and only shut down coordinator-owned resources here.
+        if (::coordinator.isInitialized) coordinator.onDestroy()
         super.onDestroy()
     }
 
     private fun createProtectedWebView(context: android.content.Context, platform: SocialPlatform): WebView {
-        check(platform == coordinator.selectedPlatform) { "WebView platform no longer selected" }
         val policy = policies.forPlatform(platform)
         lateinit var chromeClient: ProtectedWebChromeClient
         chromeClient = ProtectedWebChromeClient(
@@ -136,9 +140,14 @@ class MainActivity : ComponentActivity() {
             callbacks = coordinator,
         )
         val view = ProtectedWebViewFactory.create(context, sessionManager, webClient, chromeClient)
+        // Throwing from a Compose factory crashes the app. A missing or corrupt guard
+        // asset, or a WebView provider that no longer offers document-start scripts, is a
+        // degraded-mode condition the coordinator already knows how to present, so route
+        // it there instead. installProtection() reports rather than throws.
         val injector = PlatformScriptInjector(context, policy)
-        check(injector.install(view, coordinator::onBridgeEvent)) {
-            "Document-start WebView protection is unavailable"
+        if (!installProtection(injector, view)) {
+            coordinator.markWebViewUnavailable()
+            return view
         }
         injectors[view] = injector
         chromeClients[view] = chromeClient
@@ -146,9 +155,20 @@ class MainActivity : ComponentActivity() {
         return view
     }
 
+    private fun installProtection(injector: PlatformScriptInjector, view: WebView): Boolean =
+        try {
+            injector.install(view, coordinator::onBridgeEvent)
+        } catch (_: Exception) {
+            false
+        }
+
     private fun releaseProtectedWebView(view: WebView) {
-        injectors.remove(view)?.uninstall(view)
-        chromeClients.remove(view)?.clearActivePermissionRequest()
+        // Idempotent: Compose may release a view the Activity has already torn down.
+        val injector = injectors.remove(view)
+        val chromeClient = chromeClients.remove(view)
+        if (injector == null && chromeClient == null && !coordinator.ownsWebView(view)) return
+        injector?.uninstall(view)
+        chromeClient?.clearActivePermissionRequest()
         coordinator.releaseWebView(view)
     }
 
@@ -156,9 +176,13 @@ class MainActivity : ComponentActivity() {
         callback: ValueCallback<Array<Uri>>,
         params: WebChromeClient.FileChooserParams,
     ): Boolean {
+        // The WebChromeClient contract is: return true and invoke filePathCallback exactly
+        // once, or return false and never touch it. Doing both lets WebView run its own
+        // default handling over a consumed callback, which can leave the page's file input
+        // permanently broken. Every path below that consumes the callback returns true.
         if (!coordinator.isMessagePageActive()) {
             callback.onReceiveValue(null)
-            return false
+            return true
         }
         pendingFileCallback?.onReceiveValue(null)
         pendingFileCallback = callback
@@ -169,7 +193,7 @@ class MainActivity : ComponentActivity() {
         } catch (_: Exception) {
             pendingFileCallback = null
             callback.onReceiveValue(null)
-            false
+            true
         }
     }
 

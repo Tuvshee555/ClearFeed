@@ -13,10 +13,33 @@
   const FB_HOSTS = new Set(['facebook.com', 'www.facebook.com', 'm.facebook.com']);
   const MESSENGER_HOSTS = new Set(['messenger.com', 'www.messenger.com']);
   const BLOCKED_PREFIXES = ['/reel/', '/reels/', '/watch/', '/watch.php/', '/video/', '/video.php/', '/videos/', '/live/', '/stories/', '/story.php/', '/marketplace/', '/gaming/'];
+  const BLOCKED_SEARCH_TABS = ['/search/videos/', '/search/live/', '/search/reels/'];
+  // A Facebook username is an arbitrary single segment, so every surface Facebook
+  // reserves for itself has to be named or a discovery directory reads as a profile.
+  // Mirrors reservedSingleSegments in FacebookNavigationPolicy.kt.
+  const RESERVED_SINGLE_SEGMENTS = new Set([
+    'ads', 'bookmarks', 'developers', 'help', 'home.php', 'login', 'logout',
+    'marketplace', 'reel', 'reels', 'stories', 'watch', 'watch.php', 'video',
+    'video.php', 'videos', 'live', 'gaming', 'login.php', 'logout.php',
+    'settings', 'saved', 'fundraisers', 'memories',
+    'groups', 'events', 'pages', 'dating', 'games', 'photos', 'photo',
+    'watch_videos', 'watchparty', 'friends_center', 'friends', 'notifications',
+    'messages', 'search', 'explore', 'discover', 'feed', 'story.php',
+    'birthdays', 'weather', 'jobs', 'offers', 'fundraiser', 'donate',
+    'notes', 'music', 'sports', 'news', 'topic', 'hashtag', 'gaming_video',
+    'privacy', 'policies', 'terms', 'settings.php', 'profile.php',
+    'permalink.php', 'photo.php', 'api', 'graphql', 'ajax', 'tr', 'plugins',
+  ]);
+  const RESERVED_SUB_SEGMENTS = new Set([
+    'feed', 'discover', 'create', 'joins', 'browse', 'search', 'category',
+    'categories', 'your_groups', 'invites', 'requests', 'calendar', 'explore',
+  ]);
+  const segmentAt = (path, index) => path.replace(/^\/|\/$/g, '').split('/')[index] || '';
   const POST_SELECTOR = '[role="article"],article,[data-pagelet*="FeedUnit" i]';
   const articleStates = new WeakMap();
   let lastHref = location.href;
   let scanQueued = false;
+  let pendingScanRoot = null;
   let healthTimer = 0;
   let authenticationRequested = false;
   let retainedPosts = 0;
@@ -66,12 +89,16 @@
     try { url = new URL(urlLike, location.href); } catch (_) { return 'blocked'; }
     if (url.protocol !== 'https:') return 'blocked';
     const host = url.hostname.toLowerCase();
-    const path = normalizedPath(url);
-    if (!path) return 'blocked';
+    const rawPath = normalizedPath(url);
+    if (!rawPath) return 'blocked';
+    // Facebook resolves paths case-insensitively, so `/Reels/` reaches the same surface
+    // as `/reels/`. Matching the raw path let a single capital letter walk past every
+    // lowercase blocklist below and land on the single-segment page route.
+    const path = rawPath.toLowerCase();
     if (!FB_HOSTS.has(host) && !MESSENGER_HOSTS.has(host)) return 'external';
     if (MESSENGER_HOSTS.has(host)) {
-      if (path === '/' || path.startsWith('/login/')) return 'auth';
-      if (path.startsWith('/t/') || path === '/new/') return 'messages';
+      if (path.startsWith('/login/')) return 'auth';
+      if (path === '/' || path.startsWith('/t/') || path === '/new/') return 'messages';
       return 'blocked';
     }
     if (path === '/login.php/' || path === '/unified/login_via/app/' || path.startsWith('/login/') || path.startsWith('/checkpoint/') || path.startsWith('/recover/') ||
@@ -79,18 +106,24 @@
     const queryKeys = Array.from(url.searchParams.keys());
     if (path === '/' && url.searchParams.has('_rdr') &&
         queryKeys.every(key => key === '_rdr' || key === '__mmr')) return 'auth';
-    if (BLOCKED_PREFIXES.some(prefix => path.startsWith(prefix))) return 'blocked';
+    if (BLOCKED_PREFIXES.some(prefix => path.startsWith(prefix)) ||
+        BLOCKED_SEARCH_TABS.some(prefix => path.startsWith(prefix))) return 'blocked';
     if (path === '/' && RULES.facebookFeedRouteDecision(path, url.search) === 'newest_feed') return 'feed';
     if (path === '/messages/' || path.startsWith('/messages/t/') || path.startsWith('/messages/e2ee/t/')) return 'messages';
     if (path === '/notifications/') return 'notifications';
     if (path.startsWith('/search/')) return 'search';
     if (path === '/friends/' || path === '/friends/list/' || path === '/friends/requests/') return 'friends';
-    if (/^\/groups\/[A-Za-z0-9._-]+\/(?:posts\/[A-Za-z0-9._-]+\/)?$/.test(path)) return 'group';
-    if (/^\/events\/[A-Za-z0-9._-]+\/$/.test(path)) return 'event';
+    if (/^\/groups\/[a-z0-9._-]+\/(?:posts\/[a-z0-9._-]+\/)?$/.test(path) &&
+        !RESERVED_SUB_SEGMENTS.has(segmentAt(path, 1))) return 'group';
+    if (/^\/events\/[a-z0-9._-]+\/$/.test(path) &&
+        !RESERVED_SUB_SEGMENTS.has(segmentAt(path, 1))) return 'event';
     if (path === '/permalink.php/' || path === '/photo.php/' || path === '/photo/' ||
-        /^\/[A-Za-z0-9._-]+\/posts\/[A-Za-z0-9._-]+\/$/.test(path)) return 'post';
-    if (path === '/profile.php/' || /^\/pages\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/$/.test(path) ||
-        /^\/[A-Za-z0-9._-]+\/$/.test(path)) return 'page';
+        /^\/[a-z0-9._-]+\/posts\/[a-z0-9._-]+\/$/.test(path)) return 'post';
+    if (path === '/profile.php/') return 'page';
+    if (/^\/pages\/[a-z0-9._-]+\/[a-z0-9._-]+\/$/.test(path) &&
+        !RESERVED_SUB_SEGMENTS.has(segmentAt(path, 1))) return 'page';
+    if (/^\/[a-z0-9._-]+\/$/.test(path) &&
+        !RESERVED_SINGLE_SEGMENTS.has(path.replace(/^\/|\/$/g, ''))) return 'page';
     return 'blocked';
   }
 
@@ -377,14 +410,23 @@
       const loginSurface = kind === 'feed' && Boolean(document.querySelector('input[type="password"]'));
       if (loginSurface) {
         repairAuthenticationLayout();
-        if (loginSurfaceIsVisible() && !authenticationRequested) {
+        const visible = loginSurfaceIsVisible();
+        if (visible && !authenticationRequested) {
           authenticationRequested = true;
           post({ type: 'authentication_required', path: pathAndQuery(location.href) });
-        } else if (!loginSurfaceIsVisible()) {
+        } else if (!visible) {
           post({ type: 'guard_health', version: GUARD_VERSION, path: pathAndQuery(location.href), healthy: false });
+        } else {
+          // Previously both branches were skipped once authenticationRequested was set,
+          // so no further health was ever reported while a password field existed. If
+          // that single authentication_required was dropped, the session stayed loading
+          // forever. Keep re-asserting the request so native always has a live signal.
+          post({ type: 'authentication_required', path: pathAndQuery(location.href) });
         }
         return;
       }
+      // Leaving the login surface re-arms the one-shot request for the next sign-in.
+      authenticationRequested = false;
       let healthy = Boolean(document.body) && isSafeKind(kind);
       if (kind === 'auth') healthy = healthy && loginSurfaceIsVisible();
       if (kind === 'post') {
@@ -396,12 +438,26 @@
   }
 
   function queueScan(root) {
-    if (scanQueued) return;
+    // A scoped root is only valid while it is the single pending root. Dropping later
+    // roots left whole subtrees unsanitized during SPA hydration, because the winning
+    // scan does not cover them. Widen to the document instead of discarding them.
+    if (scanQueued) {
+      pendingScanRoot = document.documentElement;
+      return;
+    }
     scanQueued = true;
+    pendingScanRoot = root || document.documentElement;
     window.setTimeout(() => {
+      const target = pendingScanRoot || document.documentElement;
       scanQueued = false;
-      sanitize(root || document.documentElement);
-      reportHealth();
+      pendingScanRoot = null;
+      // reportHealth must run even when sanitize throws, otherwise a single DOM
+      // surprise silently starves native of health and the guard timeout fires.
+      try {
+        sanitize(target);
+      } finally {
+        reportHealth();
+      }
     }, 70);
   }
 
@@ -470,11 +526,26 @@
   }, true);
 
   const observer = new MutationObserver(records => {
-    for (const record of records) for (const node of record.addedNodes) {
-      if (node.nodeType === Node.ELEMENT_NODE) queueScan(node);
+    for (const record of records) {
+      if (record.type === 'attributes') {
+        queueScan(record.target?.nodeType === Node.ELEMENT_NODE ? record.target : null);
+        continue;
+      }
+      for (const node of record.addedNodes) {
+        if (node.nodeType === Node.ELEMENT_NODE) queueScan(node);
+      }
     }
   });
-  observer.observe(document.documentElement, { childList: true, subtree: true });
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    // React and Relay recycle anchor nodes and swap href/aria-label in place. Observing
+    // childList alone meant a recycled anchor that had already been scanned was never
+    // re-evaluated, so a node left visible for a safe route stayed visible after it was
+    // pointed at a blocked one.
+    attributes: true,
+    attributeFilter: ['href', 'aria-label'],
+  });
   window.addEventListener('popstate', auditLocation, true);
   window.addEventListener('resize', () => {
     if (routeKind(location.href) === 'auth') repairAuthenticationLayout();

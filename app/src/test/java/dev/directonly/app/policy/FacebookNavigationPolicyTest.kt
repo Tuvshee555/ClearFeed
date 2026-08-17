@@ -83,6 +83,84 @@ class FacebookNavigationPolicyTest {
     }
 
     @Test
+    fun `capitalized blocked routes cannot slip past the lowercase prefix list`() {
+        // Facebook serves its paths case-insensitively, so a single capital letter
+        // must not turn a blocked video surface into an allowed profile route.
+        listOf(
+            "https://www.facebook.com/Reels/",
+            "https://www.facebook.com/REELS/",
+            "https://www.facebook.com/Reel/123456789/",
+            "https://www.facebook.com/Watch/",
+            "https://www.facebook.com/WATCH/",
+            "https://www.facebook.com/Videos/123456789/",
+            "https://www.facebook.com/Video/123456789/",
+            "https://www.facebook.com/Live/",
+            "https://www.facebook.com/Stories/example/123/",
+            "https://www.facebook.com/Marketplace/",
+            "https://www.facebook.com/Gaming/",
+            "https://www.facebook.com/Home.php",
+        ).forEach(::assertBlocked)
+    }
+
+    @Test
+    fun `bare discovery directories fail closed instead of passing as profiles`() {
+        // The single-segment profile route must not admit Facebook's own
+        // recommendation and discovery surfaces.
+        listOf(
+            "https://www.facebook.com/groups/",
+            "https://www.facebook.com/events/",
+            "https://www.facebook.com/pages/",
+            "https://www.facebook.com/watch_videos/",
+            "https://www.facebook.com/dating/",
+            "https://www.facebook.com/games/",
+            "https://www.facebook.com/photos/",
+            "https://www.facebook.com/saved/",
+            "https://www.facebook.com/memories/",
+            "https://www.facebook.com/friends_center/",
+            "https://www.facebook.com/groups/feed/",
+            "https://www.facebook.com/groups/discover/",
+        ).forEach(::assertBlocked)
+    }
+
+    @Test
+    fun `intentional profiles pages groups and events still resolve`() {
+        // The fix for the discovery directories must not break the surfaces
+        // README documents as allowed.
+        mapOf(
+            "https://www.facebook.com/zuck/" to RouteKind.FACEBOOK_PAGE,
+            "https://www.facebook.com/example.page/" to RouteKind.FACEBOOK_PAGE,
+            "https://www.facebook.com/pages/Example-Page/123456789/" to RouteKind.FACEBOOK_PAGE,
+            "https://www.facebook.com/groups/example.group/" to RouteKind.FACEBOOK_GROUP,
+            "https://www.facebook.com/groups/123456789/posts/987654321/" to RouteKind.FACEBOOK_GROUP,
+            "https://www.facebook.com/events/123456789/" to RouteKind.FACEBOOK_EVENT,
+        ).forEach { (url, kind) ->
+            val decision = policy.evaluate(url, PolicyMode.CONTENT)
+            assertEquals("Wrong route for $url", kind, decision.routeKind)
+            assertTrue("Expected allowed route: $url", decision.mayLoadInWebView)
+        }
+    }
+
+    @Test
+    fun `video search results are blocked even though search is allowed`() {
+        assertBlocked("https://www.facebook.com/search/videos/?q=example")
+        assertEquals(
+            RouteKind.FACEBOOK_SEARCH,
+            policy.evaluate("https://www.facebook.com/search/top?q=friend", PolicyMode.CONTENT).routeKind,
+        )
+    }
+
+    @Test
+    fun `a signed-in Messenger root is the inbox and not an authentication page`() {
+        val decision = policy.evaluate("https://www.messenger.com/", PolicyMode.CONTENT)
+        assertEquals(RouteKind.FACEBOOK_MESSAGES, decision.routeKind)
+        assertTrue(decision.mayLoadInWebView)
+        // While unauthenticated it must still be reachable as a sign-in surface.
+        assertTrue(
+            policy.evaluate("https://www.messenger.com/", PolicyMode.AUTHENTICATING).mayLoadInWebView,
+        )
+    }
+
+    @Test
     fun `allows narrow authentication routes and fails closed on unknown Facebook paths`() {
         listOf(
             "https://www.facebook.com/login/",

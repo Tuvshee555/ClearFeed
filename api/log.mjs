@@ -27,15 +27,23 @@ export default function handler(request, response) {
     return response.status(405).json({ ok: false });
   }
 
+  // Content-Length is attacker-controlled and absent on chunked requests, so it cannot be
+  // the only size limit. Check it when present, then bound the parsed body independently.
   const declaredLength = Number(request.headers["content-length"] || 0);
   if (declaredLength > MAX_BODY_BYTES || !request.body || typeof request.body !== "object") {
     return response.status(400).json({ ok: false });
+  }
+  if (JSON.stringify(request.body).length > MAX_BODY_BYTES) {
+    return response.status(413).json({ ok: false });
   }
 
   const event = Object.fromEntries(
     Object.entries(ALLOWED_FIELDS).map(([field, limit]) => [field, clean(request.body[field], limit)]),
   );
-  if (!event.code.startsWith("CF-") || !event.appVersion) {
+  // Mirrors isFailureDiagnostic() in LocalDiagnostics.kt. The app already refuses to send
+  // progress stages; rejecting them here too means an older or tampered client cannot turn
+  // this endpoint into a navigation-trace collector.
+  if (!event.code.startsWith("CF-") || event.code.startsWith("CF-STAGE-") || !event.appVersion) {
     return response.status(400).json({ ok: false });
   }
 

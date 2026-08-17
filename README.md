@@ -1,6 +1,6 @@
 # ClearFeed
 
-ClearFeed is one permanent, low-distraction Android gateway for the useful parts of Instagram, YouTube, and Facebook. It uses the providers' current websites in a hardened Android WebView; it has no backend and no unrestricted mode.
+ClearFeed is one permanent, low-distraction Android gateway for the useful parts of Instagram, YouTube, and Facebook. It uses the providers' current websites in a hardened Android WebView. There is no unrestricted mode, and no server holds your data — the only network destination ClearFeed itself can reach is an optional, off-by-default failure-report endpoint described under [Privacy and permissions](#privacy-and-permissions).
 
 | Platform | Allowed | Removed |
 |---|---|---|
@@ -11,8 +11,14 @@ ClearFeed is one permanent, low-distraction Android gateway for the useful parts
 The restrictions are fixed policy, not preferences. There is no focus timer, filter switch, temporary unlock, feed-limit setting, or path to a normal social-media mode.
 
 The More options menu includes local, privacy-redacted diagnostics for WebView, HTTP, TLS, renderer,
-and protected-interface failures. Diagnostics remain on the device and contain no query strings,
-fragments, message identifiers, analytics, or backend reporting.
+and protected-interface failures. Diagnostics are recorded on the device and contain no query strings,
+fragments, message identifiers, or page content.
+
+Diagnostics stay on the device unless you turn on **Send failure reports** in the Diagnostics dialog.
+That switch is off by default. While it is on, only failure events are transmitted — never the
+`CF-STAGE-*` navigation stages — to the maintainer's endpoint, carrying the app/Android/WebView
+versions, the service name, a failure code, a host plus first path segment, and a bounded
+description. See [SECURITY.md](SECURITY.md) and [`public/privacy.html`](public/privacy.html).
 
 ## How it works
 
@@ -57,7 +63,7 @@ For professional distribution, use the signed App Bundle and Google Play interna
 
 ## Install or update DirectOnly
 
-The production application ID remains `dev.directonly.app`; ClearFeed 3.6.3 is designed to update earlier DirectOnly/ClearFeed packages when both APKs use the same signing key. The debug ID remains `dev.directonly.app.debug`.
+The production application ID remains `dev.directonly.app`; ClearFeed 3.6.5 is designed to update earlier DirectOnly/ClearFeed packages when both APKs use the same signing key. The debug ID remains `dev.directonly.app.debug`.
 
 ```powershell
 & "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r .\app\build\outputs\apk\debug\app-debug.apk
@@ -67,7 +73,7 @@ The production application ID remains `dev.directonly.app`; ClearFeed 3.6.3 is d
 
 ## Privacy and permissions
 
-Provider pages handle sign-in and content. ClearFeed does not read passwords, export cookies, log messages, include analytics, or use private social APIs. Camera/microphone and the system file picker are available only on an active Instagram Direct or Facebook/Messenger conversation route. YouTube playback never receives capture permission.
+Provider pages handle sign-in and content. ClearFeed does not read passwords, export cookies, log messages, include analytics or advertising SDKs, or use private social APIs. The only data it can ever send off the device is the opt-in failure report described above. Camera/microphone and the system file picker are available only on an active Instagram Direct or Facebook/Messenger conversation route. YouTube playback never receives capture permission.
 
 ## Important limitations
 

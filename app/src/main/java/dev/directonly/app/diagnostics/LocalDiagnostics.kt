@@ -34,6 +34,20 @@ fun buildDiagnosticReport(
     }
 }
 
+/** Prefix marking a normal progress stage rather than a failure. */
+const val PROGRESS_CODE_PREFIX = "CF-STAGE-"
+
+/**
+ * Whether a code describes an actual failure.
+ *
+ * Failure codes are partly dynamic (`CF-NET-<code>`, `CF-HTTP-<status>`, `CF-TLS-<err>`,
+ * `CF-SAFE-<threat>`), so they cannot be enumerated. Progress codes all share one prefix
+ * and are the ones that matter for privacy: a stream of stage events is a per-session
+ * navigation trace, not diagnostics. Stage events are still recorded locally for the
+ * Diagnostics dialog; they are simply never transmitted.
+ */
+fun isFailureDiagnostic(code: String): Boolean = !code.startsWith(PROGRESS_CODE_PREFIX)
+
 fun privacySafeLocation(rawUrl: String?): String {
     val uri = runCatching { URI(rawUrl.orEmpty()) }.getOrNull() ?: return "unavailable"
     val host = uri.host?.lowercase(Locale.ROOT)?.removePrefix("www.") ?: return "unavailable"
@@ -44,6 +58,13 @@ fun privacySafeLocation(rawUrl: String?): String {
 fun safeDiagnosticDetail(rawDetail: String): String = rawDetail
     .replace(Regex("[\\r\\n\\t]+"), " ")
     .replace(Regex("\\s{2,}"), " ")
+    // Detail text is partly outside ClearFeed's control: it can come from
+    // WebResourceError.description or an HTTP reason phrase. SECURITY.md states that
+    // message and thread identifiers are excluded, so redact anything identifier-shaped
+    // rather than trusting the provider's error string not to embed one. `net::ERR_*`
+    // names and short numbers such as timeout durations are unaffected.
+    .replace(Regex("\\b[0-9]{7,}\\b"), "…")
+    .replace(Regex("/[A-Za-z0-9_-]{12,}(?=/|\\b)"), "/…")
     .trim()
     .take(MAX_DETAIL_LENGTH)
     .ifBlank { "No additional detail" }

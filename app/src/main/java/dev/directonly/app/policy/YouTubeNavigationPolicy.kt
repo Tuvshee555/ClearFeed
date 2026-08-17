@@ -6,6 +6,7 @@ import dev.directonly.app.model.NavigationDisposition
 import dev.directonly.app.model.PolicyMode
 import dev.directonly.app.model.RouteKind
 import dev.directonly.app.model.SocialPlatform
+import java.util.Locale
 
 class YouTubeNavigationPolicy : PlatformNavigationPolicy {
     override val platform = SocialPlatform.YOUTUBE
@@ -81,12 +82,20 @@ class YouTubeNavigationPolicy : PlatformNavigationPolicy {
     ): NavigationDecision {
         val videoId = queryValue(normalized.query, "v")
         val intentionallyAllowed = videoId != null && videoId == context.allowedYouTubeVideoId
-        return if (intentionallyAllowed) {
+        // The capability authorizes one video ID, not the player mode wrapped around it.
+        // A playlist or radio queue auto-advances to the next item, which is exactly the
+        // rabbit hole the token exists to prevent.
+        return if (intentionallyAllowed && !hasQueuedPlayerMode(normalized.query)) {
             allowedContent(RouteKind.YOUTUBE_WATCH, normalized)
         } else {
             blocked(RouteKind.BLOCKED_YOUTUBE_CONTENT, BlockReason.INTENT_REQUIRED)
         }
     }
+
+    private fun hasQueuedPlayerMode(query: String?): Boolean = query.orEmpty()
+        .split('&')
+        .map { it.substringBefore('=').lowercase(Locale.ROOT) }
+        .any { it in QUEUED_PLAYER_PARAMS }
 
     private fun external(normalized: NormalizedUrl, mode: PolicyMode): NavigationDecision {
         val managed = ProtectedSocialHosts.contains(normalized.host) ||
@@ -130,6 +139,10 @@ class YouTubeNavigationPolicy : PlatformNavigationPolicy {
         ?.takeIf { it.matches(Regex("[A-Za-z0-9_-]{6,32}")) }
 
     companion object {
+        // Parameters that turn a single watch page into an auto-advancing queue.
+        private val QUEUED_PLAYER_PARAMS = setOf(
+            "list", "playlist", "start_radio", "index", "playnext", "rd",
+        )
         const val SUBSCRIPTIONS_URL =
             "https://m.youtube.com/feed/subscriptions?persist_app=1&app=m"
     }

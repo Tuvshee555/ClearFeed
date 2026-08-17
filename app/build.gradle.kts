@@ -100,4 +100,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     testImplementation("junit:junit:4.13.2")
+    // android.jar ships org.json as a stub that throws "not mocked" on every call, so any
+    // JVM test touching JSONObject needs the real implementation on the test classpath.
+    testImplementation("org.json:json:20250107")
 }

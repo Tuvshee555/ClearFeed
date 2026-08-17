@@ -75,4 +75,4 @@ requirement does not prevent using internal testing first.
 ## 5. Preserve release identity
 
 Never change the production application ID or lose the upload key. Increase `versionCode` for every
-Play upload. The current build is ClearFeed 3.6.3, version code 18.
+Play upload. The current build is ClearFeed 3.6.5, version code 20.

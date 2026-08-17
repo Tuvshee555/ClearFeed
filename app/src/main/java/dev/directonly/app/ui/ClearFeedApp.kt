@@ -48,6 +48,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Typography
@@ -57,6 +58,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -260,16 +262,22 @@ fun ClearFeedApp(
         if (privacyVisible) {
             InfoDialog(
                 title = "Privacy",
-                message = "ClearFeed has no backend, analytics, or private social API. Sign-in " +
-                    "and content stay in each provider's website and Android WebView storage. " +
-                    "The native bridge carries protected route and health events only.",
+                message = "ClearFeed has no analytics and no private social API. Sign-in and " +
+                    "content stay in each provider's website and Android WebView storage. The " +
+                    "native bridge carries protected route and health events only.\n\n" +
+                    "Diagnostics are recorded on this device. Nothing is sent anywhere unless " +
+                    "you turn on \"Send failure reports\" under More options, which is off by " +
+                    "default. When it is on, only failure events are sent — never the " +
+                    "navigation stages shown in Diagnostics.",
                 onDismiss = { privacyVisible = false },
             )
         }
 
         if (diagnosticsVisible) {
             DiagnosticsDialog(
-                report = coordinator.diagnosticReport(),
+                report = remember(coordinator.lastDiagnosticCode) { coordinator.diagnosticReport() },
+                remoteEnabled = coordinator.remoteDiagnosticsEnabled,
+                onRemoteEnabledChange = coordinator::updateRemoteDiagnostics,
                 onDismiss = { diagnosticsVisible = false },
             )
         }
@@ -705,18 +713,49 @@ private fun InfoDialog(title: String, message: String, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun DiagnosticsDialog(report: String, onDismiss: () -> Unit) {
+private fun DiagnosticsDialog(
+    report: String,
+    remoteEnabled: Boolean,
+    onRemoteEnabledChange: (Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
     val context = LocalContext.current
-    var copied by rememberSaveable(report) { mutableStateOf(false) }
+    // Keyed on the dialog instance, not on the report text. A new diagnostic arriving
+    // while the dialog is open used to re-key this and flip "Copied" back mid-read.
+    var copied by rememberSaveable { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Diagnostics") },
         text = {
-            SelectionContainer {
-                Text(
-                    report,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                SelectionContainer {
+                    Text(
+                        report,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                HorizontalDivider()
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics(mergeDescendants = true) {},
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Send failure reports", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "Off by default. Sends only failure events — never the navigation " +
+                                "stages above — to the ClearFeed maintainer.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = remoteEnabled,
+                        onCheckedChange = onRemoteEnabledChange,
+                    )
+                }
             }
         },
         confirmButton = {
