@@ -8,7 +8,26 @@ ClearFeed is one permanent, low-distraction Android gateway for the useful parts
 | YouTube | Subscriptions, explicit Search, and a normal video deliberately selected from either | Home, Shorts, channels/playlists, comments, related/recommended videos, autoplay-next and end-screen recommendations |
 | Facebook | Newest Feeds from followed sources, Messages, Search, Notifications, Friends/Pages/Groups/Events, and at most 8 safe non-video stream posts | Ranked Home, Reels, Stories, Watch/video/live, Marketplace, Gaming, recommendation filler, Feed video and infinite streams |
 
-The restrictions are fixed policy, not preferences. There is no focus timer, filter switch, temporary unlock, feed-limit setting, or path to a normal social-media mode.
+The restrictions above are fixed policy, not preferences. There is no filter switch, temporary unlock, feed-limit setting, or path to a normal social-media mode.
+
+On top of them you can set your own usage limits per service under More options → Usage and
+limits: a daily time budget, hours the service may open at all, a pause before it opens, and
+a minimum gap between sessions. Tightening a limit applies immediately; loosening one applies
+tomorrow, because the moment you want more time is the moment the limit is working. Usage is
+counted and stored only on the device, and the same screen shows the last seven days.
+
+## Verified routes and page filtering
+
+ClearFeed decides what may load in two independent layers. The native Kotlin URL policy is
+authoritative: it is deterministic, does not depend on provider markup, and a route it
+refuses is never shown. The injected page guard then removes feeds, recommendations, videos
+and other distraction surfaces from within an allowed page.
+
+If the guard cannot confirm a page within a couple of seconds — usually because a provider
+changed its markup — ClearFeed shows the page anyway, marks it "Reduced filtering", and keeps
+sanitizing in the background. Earlier versions kept such a page hidden indefinitely, which
+turned any provider redesign into a blank screen or a stuck spinner. A page whose URL the
+policy refuses is still never revealed.
 
 The More options menu includes local, privacy-redacted diagnostics for WebView, HTTP, TLS, renderer,
 and protected-interface failures. Diagnostics are recorded on the device and contain no query strings,
@@ -25,7 +44,7 @@ description. See [SECURITY.md](SECURITY.md) and [`public/privacy.html`](public/p
 - A native Compose launcher creates only the selected service's WebView and destroys it when returning home. Normal domain-scoped WebView cookies and storage keep sessions signed in.
 - A pure Kotlin HTTPS/host/path policy checks every main-frame request, redirect, commit, SPA update, resume, retry, and Back transition.
 - Origin-restricted AndroidX WebKit messaging carries authenticated route, deliberate-selection, and guard-health events. ClearFeed never installs `addJavascriptInterface`.
-- Per-platform scripts run at document start, conceal unverified pages, wrap SPA history, intercept clicks, and continuously sanitize regenerated DOM.
+- Per-platform scripts run at document start, wrap SPA history, intercept clicks, and continuously sanitize regenerated DOM, including anchors whose `href` is swapped in place.
 - Instagram unknown routes fail closed. A genuine tap on a supported Reel/post inside an exact Direct thread mints one short-lived, in-memory capability for that stable content ID. The sealed viewer removes adjacent/recommended content, blocks vertical Reel gestures and autoplay-next, then consumes the capability when returning to the origin thread.
 - YouTube watch URLs require a short-lived native authorization for the exact video ID selected on Subscriptions or Search.
 - Facebook starts on the live-verified newest Feeds route. It performs URL and DOM/content classification before reveal; video/Reel/Story/recommendation cards are removed and the lifetime stream count stops at eight.
@@ -77,7 +96,7 @@ Provider pages handle sign-in and content. ClearFeed does not read passwords, ex
 
 ## Important limitations
 
-- Provider routes and DOM change. ClearFeed intentionally fails closed when its native policy or guard cannot prove a page safe.
+- Provider routes and DOM change. ClearFeed fails closed whenever its native URL policy cannot prove a route safe. If only the page-level guard cannot confirm, the page is shown as "Reduced filtering" rather than withheld, so a provider redesign degrades filtering instead of breaking the app.
 - Browser versions of messaging sites may not provide every native-app feature, notification, E2EE flow, or attachment format.
 - The eight-post Facebook cap is a per-loaded stream lifetime guard, not an account-wide or daily quota.
 - ClearFeed controls only its own WebView. It cannot stop the device owner from using official apps, Chrome, another device, or uninstalling ClearFeed. Optional phone-level ideas are documented in [HARDENING.md](HARDENING.md).

@@ -42,7 +42,10 @@ committed mode explicitly. If it is ever lost again:
 - `ProtectedSocialLinkRouterTest` — protected-domain boundaries, outbound-wrapper unwrapping, directional platform handoffs, Shorts/Facebook-video/Instagram-non-DM denial, crafted app and `intent:` schemes, genuine-tap requirements.
 - `UrlNormalizerTest` — user info, explicit ports, malformed paths, unsafe encoding.
 - `CrossPlatformNavigationStackTest`, `InstagramSharedContentSessionTest` — repeated-Back return order, capability lifetime, process recreation.
-- `LocalDiagnosticsTest`, `RemoteDiagnosticsPolicyTest` — redaction of location and detail, and the two independent gates on outbound reporting (opt-in off by default; `CF-STAGE-*` never transmitted).
+- `LocalDiagnosticsTest`, `RemoteDiagnosticsPolicyTest` — redaction of location and detail, the bounded diagnostic trace and its relative timestamps, and the two independent gates on outbound reporting (opt-in off by default; `CF-STAGE-*` never transmitted).
+- `AccessPolicyTest`, `UsageStoreLogicTest` — daily budget boundaries, allowed windows including one that wraps past midnight, half-specified windows imposing nothing, cooldown, friction never masking a hard refusal, and the asymmetric edit rule (tightening applies now, loosening tomorrow, and tightening one dimension while loosening another does not count).
+- `GuardDeadlineTest` — the watchdog re-arms after firing, is not extended by repeated callbacks for the same view, and is cancelled by view identity.
+- `ProtectedSurfaceGateTest` — camera, microphone and fullscreen require the policy's disposition, not just its route kind.
 - `GuardContractTest` — **source-level prohibitions only**: no cookie access, no `addJavascriptInterface`, no `eval`, no direct network calls, no storage or input-value reads, no bypass toggle, and the Facebook eight-post limit stated identically in Kotlin and in the guard rules.
 
 **Node decision-rule suite (`tools/guard-fixture-tests.js`)** — executes `guard_rules.js`

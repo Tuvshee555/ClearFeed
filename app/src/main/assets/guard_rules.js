@@ -25,7 +25,14 @@
   function facebookFeedRouteDecision(rawPath, rawSearch) {
     const path = String(rawPath || '/');
     if (path !== '/') return 'not_feed';
-    const params = new URLSearchParams(String(rawSearch || '').replace(/^\?/, ''));
+    const search = String(rawSearch || '').replace(/^\?/, '');
+    // A bare root is where Facebook drops a freshly signed-in session, and where mobile
+    // canonicalizes the verified feed URL back to. Treating it as ranked Home meant the
+    // guard concealed the page immediately after every login. A root carrying any query is
+    // still asking for something specific and must name the complete verified pair.
+    // Mirrors FacebookNavigationPolicy.evaluate.
+    if (search === '') return 'newest_feed';
+    const params = new URLSearchParams(search);
     const filters = new Set(['all', 'favorites', 'friends', 'groups', 'pages']);
     return params.get('sk') === 'h_chr' && filters.has(params.get('filter')) ?
       'newest_feed' : 'ranked_home_block';

@@ -39,14 +39,15 @@ class FacebookNavigationPolicy : PlatformNavigationPolicy {
         "marketplace", "reel", "reels", "stories", "watch", "watch.php", "video",
         "video.php", "videos", "live", "gaming", "login.php", "logout.php",
         "settings", "saved", "fundraisers", "memories",
-        // Discovery, recommendation and directory surfaces.
+        // Discovery, recommendation and directory surfaces. Kept to segments Facebook
+        // genuinely reserves: anything listed here can never be reached as a profile, so
+        // plausible usernames (news, music, sports, notes, topic…) must stay off this list.
         "groups", "events", "pages", "dating", "games", "photos", "photo",
         "watch_videos", "watchparty", "friends_center", "friends", "notifications",
         "messages", "search", "explore", "discover", "feed", "story.php",
-        "birthdays", "weather", "jobs", "offers", "fundraiser", "donate",
-        "notes", "music", "sports", "news", "topic", "hashtag", "gaming_video",
-        "privacy", "policies", "terms", "settings.php", "profile.php",
-        "permalink.php", "photo.php", "api", "graphql", "ajax", "tr", "plugins",
+        "birthdays", "fundraiser", "hashtag", "gaming_video",
+        "settings.php", "profile.php", "permalink.php", "photo.php",
+        "api", "graphql", "ajax", "plugins",
     )
     // Facebook reserves these where a group or page identifier would otherwise sit.
     private val reservedSubSegments = setOf(
@@ -81,11 +82,20 @@ class FacebookNavigationPolicy : PlatformNavigationPolicy {
             path == "/" && isRedirectedLoginQuery(normalized.query) -> allowedAuth(normalized)
             path == "/" && isNewestFeedsQuery(normalized.query) ->
                 allowedContent(RouteKind.FACEBOOK_FEED, normalized)
-            // Facebook mobile canonicalizes the verified newest-feed URL back to `/`
-            // after authentication. In content mode the guard still enforces the
-            // eight-post limit, so accepting that canonical route prevents an
-            // endless `/` -> filtered feed -> `/` recovery loop.
-            path == "/" && normalized.query.isNullOrBlank() && mode == PolicyMode.CONTENT ->
+            // Facebook lands a freshly signed-in session on bare `/`, and mobile also
+            // canonicalizes the verified newest-feed URL back to `/`. Accepting it only in
+            // CONTENT mode meant the post-login landing was BLOCK (the mode is still
+            // AUTHENTICATING at that moment), which bounced the user through
+            // recoverToSafeRoot on every sign-in. The route is classified as the feed in any
+            // mode; the navigator canonicalizes it to the newest-feeds query, and the guard
+            // still enforces the eight-post limit on whatever renders.
+            //
+            // Only a *bare* root counts as the landing. A root carrying any other query is
+            // asking for something specific — another sort order (`?sk=nf` is ranked Home),
+            // or a redirect target (`?next=/reels/`) — and is still refused. That costs one
+            // extra navigation through the canonical feed URL, which is cheap now that the
+            // canonical URL reliably loads.
+            path == "/" && normalized.query.isNullOrBlank() ->
                 allowedContent(RouteKind.FACEBOOK_FEED, normalized)
             path == "/" || path == "/home.php/" ->
                 blocked(RouteKind.BLOCKED_FACEBOOK_CONTENT, BlockReason.FACEBOOK_CONTENT)

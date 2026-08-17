@@ -18,15 +18,24 @@ import androidx.core.net.toUri
 import androidx.webkit.WebViewCompat
 import dev.directonly.app.diagnostics.DiagnosticEnvironment
 import dev.directonly.app.diagnostics.DiagnosticRecord
+import dev.directonly.app.diagnostics.DiagnosticTrace
 import dev.directonly.app.diagnostics.DiagnosticsPreferences
 import dev.directonly.app.diagnostics.buildDiagnosticReport
 import dev.directonly.app.diagnostics.privacySafeLocation
 import dev.directonly.app.diagnostics.RemoteDiagnosticsReporter
 import dev.directonly.app.diagnostics.safeDiagnosticDetail
+import dev.directonly.app.limits.AccessDecision
+import dev.directonly.app.limits.AccessPolicy
+import dev.directonly.app.limits.LocalClock
+import dev.directonly.app.limits.ServiceLimits
+import dev.directonly.app.limits.ServiceUsageSummary
+import dev.directonly.app.limits.SystemLocalClock
+import dev.directonly.app.limits.UsageStore
 import dev.directonly.app.model.AppState
 import dev.directonly.app.model.NavigationDecision
 import dev.directonly.app.model.NavigationDisposition
 import dev.directonly.app.model.PolicyMode
+import dev.directonly.app.model.RevealState
 import dev.directonly.app.model.RouteKind
 import dev.directonly.app.model.SocialPlatform
 import dev.directonly.app.policy.NavigationContext
@@ -64,8 +73,12 @@ class ClearFeedCoordinator(
         private set
     var isLoading by mutableStateOf(false)
         private set
-    var webContentReady by mutableStateOf(false)
+    var revealState by mutableStateOf(RevealState.CONCEALED)
         private set
+
+    /** Retained for call sites that only care whether anything is on screen. */
+    val webContentReady: Boolean
+        get() = revealState.isRevealed
     var notice by mutableStateOf<String?>(null)
         private set
     var errorMessage by mutableStateOf("The protected site couldn't load.")
@@ -76,7 +89,28 @@ class ClearFeedCoordinator(
         private set
     var webViewAvailable by mutableStateOf(true)
         private set
+    /** Why the current service was refused, when [appState] is ACCESS_BLOCKED. */
+    var accessDecision by mutableStateOf<AccessDecision>(AccessDecision.Allowed)
+        private set
+
+    /** Seconds left in a running open delay. */
+    var openDelayRemainingSeconds by mutableIntStateOf(0)
+        private set
+
+    /** Bumped whenever limits change, so the UI re-reads them. */
+    var limitsRevision by mutableIntStateOf(0)
+        private set
+
+    private val clock: LocalClock = SystemLocalClock()
+    private val usageStore = UsageStore(context, clock)
+    private var sessionStartedAtElapsedMs: Long? = null
+
     private var lastDiagnostic by mutableStateOf<DiagnosticRecord?>(null)
+    private val diagnosticTrace = DiagnosticTrace()
+
+    /** Bumped on every diagnostic so the UI can re-derive its report without re-keying. */
+    var diagnosticRevision by mutableIntStateOf(0)
+        private set
     private val diagnosticsPreferences = DiagnosticsPreferences(context)
     private val remoteDiagnostics = RemoteDiagnosticsReporter.create(context, diagnosticsPreferences)
 
@@ -104,17 +138,20 @@ class ClearFeedCoordinator(
     private val instagramSharedContentSession = InstagramSharedContentSession(SystemClock::elapsedRealtime)
     private var pendingHistoryClear = false
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val guardDeadline = GuardDeadline<WebView>(
-        timeoutMs = GUARD_TIMEOUT_MS,
-        scheduler = object : GuardDeadline.Scheduler {
-            override fun post(delayMs: Long, task: () -> Unit): Any =
-                Runnable(task).also { mainHandler.postDelayed(it, delayMs) }
+    private val mainScheduler = object : GuardDeadline.Scheduler {
+        override fun post(delayMs: Long, task: () -> Unit): Any =
+            Runnable(task).also { mainHandler.postDelayed(it, delayMs) }
 
-            override fun cancel(handle: Any) {
-                (handle as? Runnable)?.let(mainHandler::removeCallbacks)
-            }
-        },
-    )
+        override fun cancel(handle: Any) {
+            (handle as? Runnable)?.let(mainHandler::removeCallbacks)
+        }
+    }
+
+    /** Outer budget: nothing permitted has loaded at all. */
+    private val guardDeadline = GuardDeadline<WebView>(GUARD_TIMEOUT_MS, mainScheduler)
+
+    /** Inner budget: the route is allowed, so show it even if the guard is still quiet. */
+    private val revealDeadline = GuardDeadline<WebView>(REVEAL_TIMEOUT_MS, mainScheduler)
     private var pendingLoadOnAttach: Pair<WebView, View.OnAttachStateChangeListener>? = null
     private val crossPlatformOrigins = CrossPlatformNavigationStack()
     private var pendingPlatformEntry: PendingPlatformEntry? = null
@@ -129,6 +166,28 @@ class ClearFeedCoordinator(
 
     fun selectPlatform(platform: SocialPlatform) {
         if (selectedPlatform == platform) return
+
+        // Usage limits are checked before anything is created. A refused service must not
+        // load a page, run a guard, or count as an open.
+        val decision = AccessPolicy.evaluate(
+            limits = usageStore.limitsFor(platform),
+            usage = usageStore.snapshot(platform),
+        )
+        if (!decision.isAllowed) {
+            selectedPlatform = platform
+            accessDecision = decision
+            appState = AppState.ACCESS_BLOCKED
+            isLoading = false
+            revealState = RevealState.CONCEALED
+            recordDiagnostic(
+                code = "CF-LIMIT-BLOCKED",
+                detail = "${platform.displayName} refused by a usage limit (${decision.javaClass.simpleName})",
+                url = null,
+            )
+            return
+        }
+        accessDecision = decision
+
         crossPlatformOrigins.clear()
         pendingPlatformEntry = null
         selectedPlatform = platform
@@ -136,24 +195,90 @@ class ClearFeedCoordinator(
         currentUrl = null
         allowedYouTubeVideoId = null
         instagramSharedContentSession.clear()
-        isLoading = webViewAvailable
-        webContentReady = false
-        appState = if (webViewAvailable) AppState.STARTING else AppState.WEBVIEW_UNAVAILABLE
+        revealState = RevealState.CONCEALED
         recordDiagnostic(
             code = "CF-STAGE-SELECTED",
             detail = "Selected ${platform.displayName}; preparing its protected sign-in page",
             url = null,
         )
+
+        val friction = decision as? AccessDecision.FrictionRequired
+        if (friction != null) {
+            // The delay runs before the WebView exists, so the wait is genuinely empty
+            // rather than a page loading behind a spinner.
+            appState = AppState.OPENING_DELAY
+            isLoading = false
+            openDelayRemainingSeconds = friction.seconds
+            tickOpenDelay(platform)
+            return
+        }
+        beginSession(platform)
+    }
+
+    private fun tickOpenDelay(platform: SocialPlatform) {
+        mainHandler.postDelayed({
+            if (selectedPlatform != platform || appState != AppState.OPENING_DELAY) return@postDelayed
+            val remaining = openDelayRemainingSeconds - 1
+            openDelayRemainingSeconds = remaining
+            if (remaining > 0) tickOpenDelay(platform) else beginSession(platform)
+        }, 1_000L)
+    }
+
+    /** Cancels a running open delay and returns to the service picker. */
+    fun cancelOpenDelay() {
+        openDelayRemainingSeconds = 0
+        goHome()
+    }
+
+    private fun beginSession(platform: SocialPlatform) {
+        usageStore.recordOpen(platform)
+        sessionStartedAtElapsedMs = clock.elapsedRealtimeMs()
+        isLoading = webViewAvailable
+        appState = if (webViewAvailable) AppState.STARTING else AppState.WEBVIEW_UNAVAILABLE
         webViewGeneration++
     }
 
+    /** Adds the foreground time of the session that just ended to today's total. */
+    private fun endSession() {
+        val platform = selectedPlatform ?: return
+        val startedAt = sessionStartedAtElapsedMs ?: return
+        sessionStartedAtElapsedMs = null
+        val seconds = ((clock.elapsedRealtimeMs() - startedAt) / 1000L)
+            .coerceIn(0L, Int.MAX_VALUE.toLong())
+            .toInt()
+        usageStore.recordSession(platform, seconds)
+    }
+
+    /** Today's usage for the service picker, so limits are visible before opening anything. */
+    fun usageSummary(platform: SocialPlatform): ServiceUsageSummary {
+        val limits = usageStore.limitsFor(platform)
+        val used = usageStore.usedSecondsToday(platform)
+        return ServiceUsageSummary(
+            limits = limits,
+            usedSecondsToday = used,
+            remainingSecondsToday = AccessPolicy.remainingSeconds(limits, used),
+            opensToday = usageStore.openCountToday(platform),
+        )
+    }
+
+    fun history(platform: SocialPlatform) = usageStore.history(platform)
+
+    fun limitsFor(platform: SocialPlatform) = usageStore.limitsFor(platform)
+
+    fun pendingLimitsFor(platform: SocialPlatform) = usageStore.pendingLimits(platform)
+
+    /** Returns the date the change takes effect: today for a tightening, tomorrow otherwise. */
+    fun updateLimits(platform: SocialPlatform, candidate: ServiceLimits) =
+        usageStore.updateLimits(platform, candidate).also { limitsRevision++ }
+
     fun goHome() {
+        endSession()
         crossPlatformOrigins.clear()
         pendingPlatformEntry = null
         selectedPlatform = null
         appState = AppState.HOME
         isLoading = false
-        webContentReady = false
+        revealState = RevealState.CONCEALED
         pendingExternalUrl = null
         allowedYouTubeVideoId = null
         instagramSharedContentSession.clear()
@@ -165,7 +290,7 @@ class ClearFeedCoordinator(
         this.chromeClient = chromeClient
         appState = AppState.STARTING
         isLoading = true
-        webContentReady = false
+        revealState = RevealState.CONCEALED
         val entry = pendingPlatformEntry?.takeIf { it.platform == selectedPlatform }
         pendingPlatformEntry = null
         recordDiagnostic(
@@ -215,6 +340,7 @@ class ClearFeedCoordinator(
         // `webView === view` guard left the stale deadline queued on the main Looper,
         // holding a destroyed WebView for up to 12s and blocking the new view's watchdog.
         guardDeadline.cancelIfOwnedBy(view)
+        revealDeadline.cancelIfOwnedBy(view)
         if (webView === view) {
             chromeClient?.clearActivePermissionRequest()
             chromeClient = null
@@ -228,7 +354,9 @@ class ClearFeedCoordinator(
 
     /** Releases coordinator-owned resources. WebView teardown is the composition's job. */
     fun onDestroy() {
+        endSession()
         guardDeadline.cancel()
+        revealDeadline.cancel()
         mainHandler.removeCallbacksAndMessages(null)
         pendingLoadOnAttach?.let { (view, listener) -> view.removeOnAttachStateChangeListener(listener) }
         pendingLoadOnAttach = null
@@ -239,7 +367,7 @@ class ClearFeedCoordinator(
         webViewAvailable = false
         if (selectedPlatform != null) appState = AppState.WEBVIEW_UNAVAILABLE
         isLoading = false
-        webContentReady = false
+        revealState = RevealState.CONCEALED
         recordDiagnostic(
             code = "CF-WEBVIEW-UNAVAILABLE",
             detail = "Required document-start script or origin-restricted message support is unavailable",
@@ -257,7 +385,7 @@ class ClearFeedCoordinator(
             androidVersion = "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
             webViewVersion = WebViewCompat.getCurrentWebViewPackage(context)?.versionName ?: "unavailable",
         ),
-        record = lastDiagnostic,
+        trace = diagnosticTrace.snapshot(),
     )
 
     fun onBridgeEvent(event: BridgeEvent) {
@@ -298,10 +426,7 @@ class ClearFeedCoordinator(
                 ) {
                     policyMode = PolicyMode.AUTHENTICATING
                     appState = AppState.AUTHENTICATING
-                    guardDeadline.cancel()
-                    view.alpha = 1f
-                    isLoading = false
-                    webContentReady = true
+                    reveal(view, RevealState.REVEALED_VERIFIED)
                     recordDiagnostic(
                         code = "CF-STAGE-LOGIN-READY",
                         detail = "Facebook sign-in form is ready on its protected entry page",
@@ -319,18 +444,15 @@ class ClearFeedCoordinator(
                 if (event.healthy && correctVersion && decision.mayLoadInWebView &&
                     sameNormalizedLocation(candidate, actualUrl)
                 ) {
-                    if (!webContentReady) {
+                    if (revealState != RevealState.REVEALED_VERIFIED) {
                         recordDiagnostic(
                             code = "CF-STAGE-GUARD-HEALTHY",
                             detail = "Protected interface verified and ready",
                             url = actualUrl,
                         )
                     }
-                    guardDeadline.cancel()
                     updateAllowedState(actualUrl, decision)
-                    view.alpha = 1f
-                    isLoading = false
-                    webContentReady = true
+                    reveal(view, RevealState.REVEALED_VERIFIED)
                 } else {
                     recordDiagnostic(
                         code = "CF-STAGE-GUARD-WAITING",
@@ -352,10 +474,11 @@ class ClearFeedCoordinator(
         val platform = selectedPlatform ?: return
         appState = AppState.STARTING
         isLoading = true
-        webContentReady = false
+        revealState = RevealState.CONCEALED
         // A retry is a fresh attempt and deserves a full deadline, not the remainder of
         // one that already expired.
         guardDeadline.cancel()
+        revealDeadline.cancel()
         navigator.retry(view, lastSafeUrls[platform])
         scheduleGuardTimeout(view)
     }
@@ -365,7 +488,7 @@ class ClearFeedCoordinator(
         crossPlatformOrigins.clear()
         pendingPlatformEntry = null
         isLoading = true
-        webContentReady = false
+        revealState = RevealState.CONCEALED
         appState = AppState.STARTING
         sessionManager.resetAll(view) {
             // This continuation is deferred until CookieManager finishes, by which time the
@@ -444,6 +567,8 @@ class ClearFeedCoordinator(
     }
 
     fun onPause() {
+        // Only foreground time counts, so the session clock stops whenever the app does.
+        endSession()
         chromeClient?.clearActivePermissionRequest()
         webView?.onPause()
         webView?.pauseTimers()
@@ -452,6 +577,9 @@ class ClearFeedCoordinator(
 
     fun onResume() {
         val view = webView ?: return
+        if (sessionStartedAtElapsedMs == null && selectedPlatform != null) {
+            sessionStartedAtElapsedMs = clock.elapsedRealtimeMs()
+        }
         view.resumeTimers()
         view.onResume()
         val decision = currentPolicy().evaluate(view.url, policyMode, navigationContext())
@@ -489,7 +617,7 @@ class ClearFeedCoordinator(
         updateAllowedState(url, decision)
         view.alpha = 0f
         isLoading = true
-        webContentReady = false
+        revealState = RevealState.CONCEALED
         recordDiagnostic(
             code = "CF-STAGE-PAGE-STARTED",
             detail = "Page navigation started (${decision.routeKind})",
@@ -520,7 +648,7 @@ class ClearFeedCoordinator(
 
     override fun onWebError(failure: WebFailure) {
         webView?.alpha = 0f
-        webContentReady = false
+        revealState = RevealState.CONCEALED
         isLoading = false
         appState = if (failure.offline) AppState.OFFLINE else AppState.WEB_ERROR
         instagramSharedContentSession.clear()
@@ -553,7 +681,7 @@ class ClearFeedCoordinator(
         errorMessage =
             "Android System WebView stopped unexpectedly. Error CF-RENDERER. Open Diagnostics for details."
         isLoading = false
-        webContentReady = false
+        revealState = RevealState.CONCEALED
         webViewGeneration++
     }
 
@@ -734,7 +862,7 @@ class ClearFeedCoordinator(
         pendingExternalUrl = null
         pendingHistoryClear = false
         isLoading = webViewAvailable
-        webContentReady = false
+        revealState = RevealState.CONCEALED
         appState = if (webViewAvailable) AppState.STARTING else AppState.WEBVIEW_UNAVAILABLE
         webViewGeneration++
     }
@@ -764,9 +892,13 @@ class ClearFeedCoordinator(
         decision: NavigationDecision,
     ): Boolean {
         if (selectedPlatform != SocialPlatform.INSTAGRAM ||
-            policyMode != PolicyMode.AUTHENTICATING ||
-            decision.routeKind != RouteKind.BLOCKED_INSTAGRAM_CONTENT
+            policyMode != PolicyMode.AUTHENTICATING
         ) return false
+        // Instagram lands a signed-in session on the home feed, which classifies as blocked
+        // content, or on an unrecognised variant of it.
+        val isPostLoginLanding = decision.routeKind == RouteKind.BLOCKED_INSTAGRAM_CONTENT ||
+            decision.routeKind == RouteKind.UNKNOWN_INSTAGRAM
+        if (!isPostLoginLanding) return false
         val normalized = (UrlNormalizer.normalize(url) as? UrlNormalizationResult.Valid)?.value
             ?: return false
         if (normalized.host !in setOf("instagram.com", "www.instagram.com") || normalized.path != "/") {
@@ -776,7 +908,7 @@ class ClearFeedCoordinator(
         view.stopLoading()
         appState = AppState.STARTING
         isLoading = true
-        webContentReady = false
+        revealState = RevealState.CONCEALED
         policyMode = PolicyMode.DIRECT
         pendingHistoryClear = true
         recordDiagnostic(
@@ -796,7 +928,7 @@ class ClearFeedCoordinator(
         view.stopLoading()
         appState = AppState.BLOCKED_RECOVERY
         isLoading = true
-        webContentReady = false
+        revealState = RevealState.CONCEALED
         policyMode = PolicyMode.CONTENT
         if (selectedPlatform == SocialPlatform.YOUTUBE) allowedYouTubeVideoId = null
         pendingHistoryClear = true
@@ -810,7 +942,7 @@ class ClearFeedCoordinator(
         view.stopLoading()
         appState = AppState.BLOCKED_RECOVERY
         isLoading = true
-        webContentReady = false
+        revealState = RevealState.CONCEALED
         policyMode = PolicyMode.DIRECT
         pendingHistoryClear = false
         navigator.openIntentional(view, originThread)
@@ -824,25 +956,77 @@ class ClearFeedCoordinator(
 
     private fun scheduleGuardTimeout(view: WebView) {
         guardDeadline.schedule(view, ::fireGuardTimeout)
+        revealDeadline.schedule(view, ::fireRevealDeadline)
+    }
+
+    /** Shows the WebView and settles the loading state. */
+    private fun reveal(view: WebView, state: RevealState) {
+        guardDeadline.cancel()
+        revealDeadline.cancel()
+        view.alpha = 1f
+        isLoading = false
+        revealState = state
+    }
+
+    /**
+     * Reveals a page the native policy allows but the guard has not confirmed.
+     *
+     * The URL allowlist is the guarantee that matters and it has already passed. Waiting
+     * indefinitely for a DOM check built on provider markup is what produced blank screens
+     * and endless spinners whenever Instagram or Facebook changed their HTML. The guard
+     * keeps running and keeps sanitizing; it just no longer decides whether the app works.
+     */
+    private fun fireRevealDeadline(view: WebView) {
+        if (webView !== view || revealState.isRevealed) return
+        if (appState == AppState.WEB_ERROR || appState == AppState.OFFLINE) return
+        val decision = currentPolicy().evaluate(view.url ?: currentUrl, policyMode, navigationContext())
+        if (!decision.mayLoadInWebView) {
+            // A route the policy refuses is never revealed, whatever the guard is doing.
+            return
+        }
+        recordDiagnostic(
+            code = "CF-STAGE-REVEALED-UNVERIFIED",
+            detail = "Route allowed by policy; showing it before the guard confirmed the page",
+            url = view.url,
+        )
+        updateAllowedState(view.url ?: currentUrl ?: return, decision)
+        reveal(view, RevealState.REVEALED_UNVERIFIED)
     }
 
     private fun fireGuardTimeout(view: WebView) {
         trace("guard-timeout-fired view=${System.identityHashCode(view)} active=${webView === view} ready=$webContentReady")
-        if (!webContentReady && webView === view) {
-            view.alpha = 0f
-            isLoading = false
-            appState = AppState.WEB_ERROR
-            instagramSharedContentSession.clear()
-            val service = selectedPlatform?.displayName ?: "The service"
+        if (webContentReady || webView !== view) return
+
+        // The page still is not showing after the full budget. If the policy allows the
+        // route, this is the last chance to reveal it rather than strand the user; the
+        // reveal deadline normally gets there first, but a slow login redirect chain can
+        // finish after it has already passed.
+        val decision = currentPolicy().evaluate(view.url ?: currentUrl, policyMode, navigationContext())
+        if (decision.mayLoadInWebView) {
             recordDiagnostic(
-                code = "CF-GUARD-TIMEOUT",
-                detail = "The protected interface did not report healthy within ${GUARD_TIMEOUT_MS}ms",
+                code = "CF-GUARD-UNVERIFIED",
+                detail = "Guard did not report healthy within ${GUARD_TIMEOUT_MS}ms; " +
+                    "route is policy-allowed so it is shown with reduced protection",
                 url = view.url,
             )
-            errorMessage =
-                "ClearFeed couldn't verify $service's protected interface. " +
-                    "Error CF-GUARD-TIMEOUT. Open Diagnostics for details."
+            fireRevealDeadline(view)
+            return
         }
+
+        // Only a route the policy itself refuses becomes an error surface.
+        view.alpha = 0f
+        isLoading = false
+        appState = AppState.WEB_ERROR
+        instagramSharedContentSession.clear()
+        val service = selectedPlatform?.displayName ?: "The service"
+        recordDiagnostic(
+            code = "CF-GUARD-TIMEOUT",
+            detail = "No permitted route loaded within ${GUARD_TIMEOUT_MS}ms",
+            url = view.url,
+        )
+        errorMessage =
+            "$service didn't finish loading a page ClearFeed allows. " +
+                "Error CF-GUARD-TIMEOUT. Open Diagnostics for details."
     }
 
     private fun dispatchWhenAttached(view: WebView, action: () -> Unit) {
@@ -908,7 +1092,9 @@ class ClearFeedCoordinator(
             location = privacySafeLocation(url),
             detail = safeDiagnosticDetail(detail),
         )
+        diagnosticTrace.record(record, SystemClock.elapsedRealtime())
         lastDiagnostic = record
+        diagnosticRevision++
         remoteDiagnostics.report(record)
     }
 
@@ -926,6 +1112,11 @@ class ClearFeedCoordinator(
     companion object {
         private const val LOG_TAG = "ClearFeedLifecycle"
         private const val GUARD_TIMEOUT_MS = 12_000L
+
+        // How long a policy-allowed route waits for the guard before it is shown anyway.
+        // Long enough that a healthy guard almost always wins the race and the page appears
+        // fully sanitized; short enough that a drifted selector costs a moment, not the app.
+        private const val REVEAL_TIMEOUT_MS = 2_500L
         private const val NOTICE_DURATION_MS = 3_500L
     }
 

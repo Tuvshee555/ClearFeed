@@ -200,9 +200,15 @@ test('S4 facebook: specific groups, events and pages still resolve', () => {
   assert.equal(facebookRouteIsBlocked('/pages/Example-Page/123456/'), false);
 });
 
-test('facebook: the newest-feed query is the only allowed root', () => {
+test('facebook: the post-login landing and the verified feed are the allowed roots', () => {
+  // The bare root is where Facebook drops a signed-in session. Concealing it here is what
+  // blanked the screen immediately after every login.
+  assert.equal(facebookRouteIsBlocked('/'), false);
   assert.equal(facebookRouteIsBlocked('/?filter=all&sk=h_chr'), false);
+  // Anything that names a surface explicitly is still refused.
   assert.equal(facebookRouteIsBlocked('/?sk=nf'), true);
+  assert.equal(facebookRouteIsBlocked('/?filter=all'), true);
+  assert.equal(facebookRouteIsBlocked('/?next=/reels/'), true);
   assert.equal(facebookRouteIsBlocked('/home.php'), true);
 });
 

@@ -55,8 +55,12 @@ class FacebookNavigationPolicyTest {
         )
         assertEquals(NavigationDisposition.ALLOW_CONTENT, canonicalPostLoginFeed.disposition)
         assertEquals(RouteKind.FACEBOOK_FEED, canonicalPostLoginFeed.routeKind)
+        // The bare root is the feed landing in AUTHENTICATING mode too. This assertion used
+        // to expect BLOCK, which is exactly what made every successful sign-in bounce
+        // through recoverToSafeRoot: Facebook drops the user on `/` while the mode is still
+        // AUTHENTICATING. Ranked Home stays blocked through `/?sk=nf`, asserted above.
         assertEquals(
-            NavigationDisposition.BLOCK,
+            NavigationDisposition.ALLOW_CONTENT,
             policy.evaluate("https://www.facebook.com/", PolicyMode.AUTHENTICATING).disposition,
         )
         assertEquals(
@@ -80,6 +84,48 @@ class FacebookNavigationPolicyTest {
             "https://www.facebook.com/marketplace/",
             "https://www.facebook.com/gaming/",
         ).forEach(::assertBlocked)
+    }
+
+    @Test
+    fun `the post-login landing on the bare root is the feed in every mode`() {
+        // Facebook drops a freshly signed-in session on `/`, at which point policyMode is
+        // still AUTHENTICATING. Allowing that only in CONTENT mode made every sign-in a
+        // BLOCK, which bounced the user through recoverToSafeRoot and, when the guard then
+        // failed to verify, straight back around again.
+        listOf(PolicyMode.AUTHENTICATING, PolicyMode.CONTENT, PolicyMode.DIRECT).forEach { mode ->
+            val decision = policy.evaluate("https://m.facebook.com/", mode)
+            assertEquals("bare root in $mode", RouteKind.FACEBOOK_FEED, decision.routeKind)
+            assertTrue("bare root must load in $mode", decision.mayLoadInWebView)
+        }
+    }
+
+    @Test
+    fun `only a bare root is a landing and every other root query stays refused`() {
+        // A root carrying a query is asking for something specific, including a redirect
+        // target, so it is refused and recovery canonicalizes to the verified feed instead.
+        listOf(
+            "https://www.facebook.com/?sk=nf",
+            "https://www.facebook.com/?filter=all",
+            "https://www.facebook.com/?sk=h_chr",
+            "https://www.facebook.com/?filter=unknown&sk=h_chr",
+            "https://www.facebook.com/?next=/reels/",
+        ).forEach(::assertBlocked)
+        assertTrue(
+            policy.evaluate("https://www.facebook.com/?filter=all&sk=h_chr", PolicyMode.CONTENT)
+                .mayLoadInWebView,
+        )
+    }
+
+    @Test
+    fun `plausible usernames are not mistaken for reserved surfaces`() {
+        // A previous over-broad reserved list swallowed ordinary words that are perfectly
+        // valid Facebook usernames, so real profiles stopped opening.
+        listOf("news", "music", "sports", "notes", "topic", "weather", "jobs", "offers", "terms")
+            .forEach { username ->
+                val decision = policy.evaluate("https://www.facebook.com/$username/", PolicyMode.CONTENT)
+                assertEquals("/$username/ is a profile", RouteKind.FACEBOOK_PAGE, decision.routeKind)
+                assertTrue("/$username/ must load", decision.mayLoadInWebView)
+            }
     }
 
     @Test

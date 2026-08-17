@@ -3,6 +3,7 @@ package dev.directonly.app.ui
 import android.content.Context
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Intent
 import android.webkit.WebView
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -73,6 +74,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -82,7 +84,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.directonly.app.BuildConfig
 import dev.directonly.app.ClearFeedCoordinator
+import dev.directonly.app.limits.ServiceLimits
+import dev.directonly.app.limits.ServiceUsageSummary
 import dev.directonly.app.model.AppState
+import dev.directonly.app.model.RevealState
 import dev.directonly.app.model.SocialPlatform
 import java.net.URI
 import java.util.Locale
@@ -176,6 +181,7 @@ fun ClearFeedApp(
         var aboutVisible by rememberSaveable { mutableStateOf(false) }
         var privacyVisible by rememberSaveable { mutableStateOf(false) }
         var diagnosticsVisible by rememberSaveable { mutableStateOf(false) }
+        var statsVisible by rememberSaveable { mutableStateOf(false) }
 
         BackHandler {
             when {
@@ -184,6 +190,7 @@ fun ClearFeedApp(
                 aboutVisible -> aboutVisible = false
                 privacyVisible -> privacyVisible = false
                 diagnosticsVisible -> diagnosticsVisible = false
+                statsVisible -> statsVisible = false
                 coordinator.pendingExternalUrl != null -> coordinator.clearExternalPrompt()
                 handleSystemBack() -> Unit
                 coordinator.selectedPlatform != null -> coordinator.handleBack(exit)
@@ -206,13 +213,45 @@ fun ClearFeedApp(
                     onAbout = { aboutVisible = true },
                     onPrivacy = { privacyVisible = true },
                     onDiagnostics = { diagnosticsVisible = true },
+                    onStats = { statsVisible = true },
                 )
 
                 val platform = coordinator.selectedPlatform
-                if (platform == null) {
-                    ServicePicker(onSelect = coordinator::selectPlatform)
-                } else {
-                    ProtectedService(
+                when {
+                    statsVisible -> UsageStatsScreen(
+                        historyByPlatform = remember(coordinator.limitsRevision, statsVisible) {
+                            SocialPlatform.entries.associateWith(coordinator::history)
+                        },
+                        limitsFor = coordinator::limitsFor,
+                        pendingFor = coordinator::pendingLimitsFor,
+                        onLimitsChange = coordinator::updateLimits,
+                        onDismiss = { statsVisible = false },
+                    )
+
+                    platform == null -> ServicePicker(
+                        onSelect = coordinator::selectPlatform,
+                        usageFor = { service ->
+                            // Re-read whenever limits change or a session ends, so the
+                            // remaining-time note is current when returning from a service.
+                            key(coordinator.limitsRevision, coordinator.appState) {
+                                coordinator.usageSummary(service)
+                            }
+                        },
+                    )
+
+                    coordinator.appState == AppState.ACCESS_BLOCKED -> AccessBlockedSurface(
+                        platform = platform,
+                        decision = coordinator.accessDecision,
+                        onBack = coordinator::goHome,
+                    )
+
+                    coordinator.appState == AppState.OPENING_DELAY -> OpeningDelaySurface(
+                        platform = platform,
+                        secondsRemaining = coordinator.openDelayRemainingSeconds,
+                        onCancel = coordinator::cancelOpenDelay,
+                    )
+
+                    else -> ProtectedService(
                         platform = platform,
                         coordinator = coordinator,
                         webViewFactory = webViewFactory,
@@ -275,7 +314,7 @@ fun ClearFeedApp(
 
         if (diagnosticsVisible) {
             DiagnosticsDialog(
-                report = remember(coordinator.lastDiagnosticCode) { coordinator.diagnosticReport() },
+                report = remember(coordinator.diagnosticRevision) { coordinator.diagnosticReport() },
                 remoteEnabled = coordinator.remoteDiagnosticsEnabled,
                 onRemoteEnabledChange = coordinator::updateRemoteDiagnostics,
                 onDismiss = { diagnosticsVisible = false },
@@ -320,6 +359,7 @@ private fun ClearFeedHeader(
     onAbout: () -> Unit,
     onPrivacy: () -> Unit,
     onDiagnostics: () -> Unit,
+    onStats: () -> Unit,
 ) {
     Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
         Column {
@@ -387,6 +427,13 @@ private fun ClearFeedHeader(
                             },
                         )
                         DropdownMenuItem(
+                            text = { Text("Usage and limits") },
+                            onClick = {
+                                onMenuExpandedChange(false)
+                                onStats()
+                            },
+                        )
+                        DropdownMenuItem(
                             text = { Text("Privacy") },
                             onClick = {
                                 onMenuExpandedChange(false)
@@ -409,7 +456,10 @@ private fun ClearFeedHeader(
 }
 
 @Composable
-private fun ServicePicker(onSelect: (SocialPlatform) -> Unit) {
+private fun ServicePicker(
+    onSelect: (SocialPlatform) -> Unit,
+    usageFor: @Composable (SocialPlatform) -> ServiceUsageSummary,
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -444,7 +494,11 @@ private fun ServicePicker(onSelect: (SocialPlatform) -> Unit) {
         )
         Spacer(Modifier.height(24.dp))
         SocialPlatform.entries.forEach { platform ->
-            ServiceCard(platform = platform, onClick = { onSelect(platform) })
+            ServiceCard(
+                platform = platform,
+                summary = usageFor(platform),
+                onClick = { onSelect(platform) },
+            )
             Spacer(Modifier.height(12.dp))
         }
         Spacer(Modifier.height(8.dp))
@@ -481,7 +535,11 @@ private fun ServicePicker(onSelect: (SocialPlatform) -> Unit) {
 }
 
 @Composable
-private fun ServiceCard(platform: SocialPlatform, onClick: () -> Unit) {
+private fun ServiceCard(
+    platform: SocialPlatform,
+    summary: ServiceUsageSummary,
+    onClick: () -> Unit,
+) {
     val accent = platformAccent(platform)
     Card(
         onClick = onClick,
@@ -527,6 +585,9 @@ private fun ServiceCard(platform: SocialPlatform, onClick: () -> Unit) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                // Remaining time is shown before opening, so the budget is a decision made
+                // at the door rather than an interruption partway through.
+                ServiceUsageNote(summary)
             }
             Text(
                 "Open",
@@ -585,6 +646,32 @@ private fun ProtectedService(
             )
             else -> if (coordinator.isLoading || !coordinator.webContentReady) {
                 LoadingSurface(platform)
+            }
+        }
+
+        // The route passed the URL policy but the page-level guard never confirmed it, so
+        // some of the on-page filtering may not have been applied. Worth saying quietly;
+        // not worth blocking the app over, which is what it used to do.
+        AnimatedVisibility(
+            visible = coordinator.revealState == RevealState.REVEALED_UNVERIFIED,
+            modifier = Modifier.align(Alignment.TopCenter),
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            Surface(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.tertiaryContainer,
+                tonalElevation = 2.dp,
+            ) {
+                Text(
+                    "Reduced filtering on this page",
+                    modifier = Modifier
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                        .semantics { liveRegion = LiveRegionMode.Polite },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                )
             }
         }
 
@@ -728,10 +815,17 @@ private fun DiagnosticsDialog(
         title = { Text("Diagnostics") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                SelectionContainer {
+                // The trace can run to fifty lines, so it scrolls rather than pushing the
+                // opt-in switch and the buttons off screen.
+                SelectionContainer(
+                    modifier = Modifier
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
                     Text(
                         report,
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
                     )
                 }
                 HorizontalDivider()
@@ -759,14 +853,30 @@ private fun DiagnosticsDialog(
             }
         },
         confirmButton = {
-            TextButton(
-                onClick = {
-                    context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(
-                        ClipData.newPlainText("ClearFeed diagnostics", report),
-                    )
-                    copied = true
-                },
-            ) { Text(if (copied) "Copied" else "Copy diagnostics") }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(
+                    onClick = {
+                        context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(
+                            ClipData.newPlainText("ClearFeed diagnostics", report),
+                        )
+                        copied = true
+                    },
+                ) { Text(if (copied) "Copied" else "Copy") }
+                TextButton(
+                    onClick = {
+                        // Sharing keeps the report on the device until the user picks a
+                        // destination themselves; nothing is transmitted by ClearFeed.
+                        val share = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_SUBJECT, "ClearFeed diagnostics")
+                            putExtra(Intent.EXTRA_TEXT, report)
+                        }
+                        runCatching {
+                            context.startActivity(Intent.createChooser(share, "Share diagnostics"))
+                        }
+                    },
+                ) { Text("Share") }
+            }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Done") } },
     )
@@ -792,11 +902,18 @@ private fun platformAccent(platform: SocialPlatform): Color = when (platform) {
     SocialPlatform.FACEBOOK -> if (isSystemInDarkTheme()) Color(0xFF8AB4F8) else Color(0xFF0B57D0)
 }
 
+private fun previewUsageSummary() = ServiceUsageSummary(
+    limits = ServiceLimits.UNRESTRICTED,
+    usedSecondsToday = 0,
+    remainingSecondsToday = null,
+    opensToday = 0,
+)
+
 @Preview(name = "Service picker · light", showBackground = true, widthDp = 360, heightDp = 800)
 @Composable
 private fun ServicePickerLightPreview() {
     MaterialTheme(colorScheme = LightColors, typography = ClearFeedTypography, shapes = ClearFeedShapes) {
-        Surface(color = MaterialTheme.colorScheme.background) { ServicePicker(onSelect = {}) }
+        Surface(color = MaterialTheme.colorScheme.background) { ServicePicker(onSelect = {}, usageFor = { previewUsageSummary() }) }
     }
 }
 
@@ -810,6 +927,6 @@ private fun ServicePickerLightPreview() {
 @Composable
 private fun ServicePickerDarkPreview() {
     MaterialTheme(colorScheme = DarkColors, typography = ClearFeedTypography, shapes = ClearFeedShapes) {
-        Surface(color = MaterialTheme.colorScheme.background) { ServicePicker(onSelect = {}) }
+        Surface(color = MaterialTheme.colorScheme.background) { ServicePicker(onSelect = {}, usageFor = { previewUsageSummary() }) }
     }
 }

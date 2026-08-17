@@ -261,10 +261,12 @@ assert.equal(rules.facebookFeedRouteDecision('/', '?filter=all'), 'ranked_home_b
   'filter without sk is not the verified feed');
 assert.equal(rules.facebookFeedRouteDecision('/', '?filter=unknown&sk=h_chr'), 'ranked_home_block',
   'unknown filter value');
-assert.equal(rules.facebookFeedRouteDecision('/', ''), 'ranked_home_block',
-  'bare root is ranked Home');
-assert.equal(rules.facebookFeedRouteDecision(undefined, undefined), 'ranked_home_block',
-  'missing arguments fail closed');
+assert.equal(rules.facebookFeedRouteDecision('/', ''), 'newest_feed',
+  'a bare root is the post-login feed landing, not ranked Home');
+assert.equal(rules.facebookFeedRouteDecision('/', '?next=/reels/'), 'ranked_home_block',
+  'a root carrying a redirect target is refused');
+assert.equal(rules.facebookFeedRouteDecision('/messages/', undefined), 'not_feed',
+  'a non-root path is never the feed');
 
 // facebookArticleDecision: the 500-character text window. A recommendation marker sitting
 // below a long caption used to survive, because only the first 500 characters are scanned.

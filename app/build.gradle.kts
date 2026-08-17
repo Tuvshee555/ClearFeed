@@ -65,6 +65,10 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // The usage limits key on local calendar dates, and java.time is API 26+ while
+        // minSdk is 24. Desugaring is preferable to hand-rolling date arithmetic in code
+        // that decides whether the app opens at all.
+        isCoreLibraryDesugaringEnabled = true
     }
 
     packaging {
@@ -96,6 +100,8 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.core:core-ktx:1.18.0")
     implementation("androidx.webkit:webkit:1.16.0")
+
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 
