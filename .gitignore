@@ -10,6 +10,7 @@ captures/
 .cxx/
 *.jks
 *.keystore
+!clearfeed-debug.keystore
 *.apk
 *.aab
 !public/downloads/ClearFeed.apk

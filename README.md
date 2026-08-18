@@ -80,15 +80,40 @@ Release signing credentials are intentionally not stored in the repository.
 For professional distribution, use the signed App Bundle and Google Play internal testing workflow in
 [`PLAY_STORE.md`](PLAY_STORE.md). Vercel is useful for a public privacy-policy page, not for running the app.
 
-## Install or update DirectOnly
+## Install or update
 
-The production application ID remains `dev.directonly.app`; ClearFeed 3.7.0 is designed to update earlier DirectOnly/ClearFeed packages when both APKs use the same signing key. The debug ID remains `dev.directonly.app.debug`.
+The production application ID remains `dev.directonly.app`; the debug ID is
+`dev.directonly.app.debug`.
 
-```powershell
-& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r .\app\build\outputs\apk\debug\app-debug.apk
+```bash
+adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-`-r` requests an in-place update and preserves WebView app data. Android will reject an update signed with a different key; never uninstall merely to conceal a signing mismatch.
+`-r` requests an in-place update and preserves WebView app data, so sign-ins survive.
+
+### Debug builds use a fixed signing key
+
+`clearfeed-debug.keystore` is committed and the `debug` build type is configured to use it.
+Android's default is a keystore generated per machine, which means a debug APK built on
+another computer, in CI, or in a fresh checkout is signed with a different key — and Android
+refuses to install it over an existing app:
+
+> App not installed as package conflicts with an existing package.
+
+Pinning the key makes any machine produce an installable update. Only the `.debug`
+application ID is signed with it; the release key is never stored in the repository.
+
+**One-time migration.** A debug build installed before this change was signed with a
+different key, so the first install of a pinned build still fails with the message above.
+Uninstall the old debug app once and install fresh:
+
+```bash
+adb uninstall dev.directonly.app.debug
+adb install app/build/outputs/apk/debug/app-debug.apk
+```
+
+That clears WebView data, so every service needs signing in again — once. Updates after
+that install in place and keep sessions.
 
 ## Privacy and permissions
 

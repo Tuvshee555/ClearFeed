@@ -29,6 +29,23 @@ android {
     }
 
     signingConfigs {
+        // A fixed debug key committed to the repository.
+        //
+        // Android's default is a keystore auto-generated per machine, so a debug APK built
+        // anywhere else is signed with a different key, and Android refuses to update an
+        // installed app whose signature does not match: "App not installed as package
+        // conflicts with an existing package." That makes it impossible to ship a debug
+        // build from CI or from a fresh checkout without uninstalling first and losing every
+        // WebView session. Pinning the key means any machine produces an installable update.
+        //
+        // This grants no meaningful capability to anyone: it signs only the `.debug`
+        // application ID, and the release key is still kept out of the repository entirely.
+        create("debugShared") {
+            storeFile = rootProject.file("clearfeed-debug.keystore")
+            storePassword = "clearfeed"
+            keyAlias = "clearfeeddebug"
+            keyPassword = "clearfeed"
+        }
         if (releaseKeystorePropertiesFile.isFile) {
             create("release") {
                 storeFile = rootProject.file(requireNotNull(releaseKeystoreProperties.getProperty("storeFile")))
@@ -43,6 +60,7 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            signingConfig = signingConfigs.getByName("debugShared")
         }
         release {
             isMinifyEnabled = true
