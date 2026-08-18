@@ -413,6 +413,31 @@
     sanitizeSealedViewer();
   }
 
+  /**
+   * Whether the Direct inbox has painted something recognisable.
+   *
+   * This used to require `[aria-label="Thread list"]` exactly. That is one English,
+   * case-sensitive Instagram string: aria-labels are localized, so on a phone set to any
+   * other language it never matched, and Instagram is free to rename it at any time. When
+   * it missed, the inbox never reported healthy and the page stayed hidden until the
+   * watchdog fired — a confirmed CF-GUARD-TIMEOUT on a signed-in inbox.
+   *
+   * The checks below are structural and language-independent, ordered strongest first.
+   * The point is only to avoid revealing a blank or half-painted page, so the last resort
+   * is simply "main has rendered content".
+   */
+  function directInboxIsReady() {
+    const main = document.querySelector('main');
+    if (!main) return false;
+    if (main.querySelector('a[href^="/direct/t/"]')) return true;
+    if (main.querySelector('[role="list"],[role="listbox"],[role="grid"],[aria-label*="thread" i]')) {
+      return true;
+    }
+    // An inbox with no conversations still renders copy, and an avatar-only row still
+    // renders an image.
+    return main.textContent.trim().length > 0 || Boolean(main.querySelector('img,svg,canvas'));
+  }
+
   function reportHealth() {
     clearTimeout(healthTimer);
     healthTimer = window.setTimeout(() => {
@@ -422,7 +447,7 @@
       if (kind === 'direct') {
         healthy = Boolean(document.querySelector('main'));
         if (normalizePath(new URL(location.href)) === '/direct/inbox/') {
-          healthy = healthy && Boolean(document.querySelector('[aria-label="Thread list"]'));
+          healthy = healthy && directInboxIsReady();
         }
       } else if (kind === 'shared') {
         const main = document.querySelector('main');

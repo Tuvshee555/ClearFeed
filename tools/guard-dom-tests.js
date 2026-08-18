@@ -310,6 +310,54 @@ test('instagram: Direct routes are revealed and everything else is concealed', (
 });
 
 // ---------------------------------------------------------------------------
+// Direct inbox readiness: the confirmed CF-GUARD-TIMEOUT on a signed-in phone
+// ---------------------------------------------------------------------------
+
+const INBOX_URL = 'https://www.instagram.com/direct/inbox/';
+
+async function inboxReportsHealthy(bodyHtml) {
+  const { window, messages } = boot('instagram', INBOX_URL, bodyHtml);
+  await settle(window, 300);
+  const health = messages.filter(m => m.type === 'guard_health');
+  assert.ok(health.length > 0, 'the guard must report health on the inbox');
+  return health.at(-1).healthy === true;
+}
+
+test('inbox: a rendered thread list reports healthy', async () => {
+  assert.equal(
+    await inboxReportsHealthy(
+      '<main><div aria-label="Thread list"><a href="/direct/t/1/">Someone</a></div></main>',
+    ),
+    true,
+  );
+});
+
+test('inbox: readiness does not depend on one exact English aria-label', async () => {
+  // The regression. `[aria-label="Thread list"]` is localized and Instagram can rename it;
+  // when it missed, the signed-in inbox never reported healthy and the page stayed hidden
+  // until the watchdog fired.
+  for (const body of [
+    // Localized label, real conversation links.
+    '<main><div aria-label="Жагсаалт"><a href="/direct/t/1/">Someone</a></div></main>',
+    // Renamed label, semantic list role.
+    '<main><div aria-label="Chats" role="list"><div role="listitem">Someone</div></div></main>',
+    // No label at all, just conversation links.
+    '<main><a href="/direct/t/1/">Someone</a><a href="/direct/t/2/">Someone else</a></main>',
+    // An inbox with no conversations still renders copy.
+    '<main><h1>No messages yet</h1></main>',
+  ]) {
+    assert.equal(await inboxReportsHealthy(body), true, `must be healthy: ${body}`);
+  }
+});
+
+test('inbox: a blank shell still reports unhealthy', async () => {
+  // The check must still refuse to vouch for a page that has painted nothing, otherwise
+  // it would confirm a blank screen as verified.
+  assert.equal(await inboxReportsHealthy('<main></main>'), false);
+  assert.equal(await inboxReportsHealthy('<div>no main element</div>'), false);
+});
+
+// ---------------------------------------------------------------------------
 // R2: DOM sanitation covers in-place href swaps and batched mutations
 // ---------------------------------------------------------------------------
 

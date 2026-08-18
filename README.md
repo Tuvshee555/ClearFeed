@@ -82,7 +82,7 @@ For professional distribution, use the signed App Bundle and Google Play interna
 
 ## Install or update DirectOnly
 
-The production application ID remains `dev.directonly.app`; ClearFeed 3.6.5 is designed to update earlier DirectOnly/ClearFeed packages when both APKs use the same signing key. The debug ID remains `dev.directonly.app.debug`.
+The production application ID remains `dev.directonly.app`; ClearFeed 3.7.0 is designed to update earlier DirectOnly/ClearFeed packages when both APKs use the same signing key. The debug ID remains `dev.directonly.app.debug`.
 
 ```powershell
 & "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r .\app\build\outputs\apk\debug\app-debug.apk
