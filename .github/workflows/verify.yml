@@ -61,25 +61,3 @@ jobs:
             app/build/reports/
             app/build/test-results/
           if-no-files-found: ignore
-
-  guards:
-    name: Guard syntax, decision rules and DOM behaviour
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Install test dependencies
-        run: npm install --no-audit --no-fund
-
-      - name: Guard syntax
-        run: node tools/check-guard-syntax.js
-
-      - name: Guard decision rules
-        run: node tools/guard-fixture-tests.js
-
-      - name: Guard behaviour in a real DOM
-        run: node tools/guard-dom-tests.js

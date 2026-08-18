@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ClearFeed</string>
+    <string name="blocker_service_label">ClearFeed Shorts Blocker</string>
+    <string name="accessibility_service_description">Watches for the YouTube Shorts player and returns you to your home screen when it opens. Reads only structural view identifiers — never on-screen text, captions, or account information — and sends nothing off the device.</string>
 </resources>

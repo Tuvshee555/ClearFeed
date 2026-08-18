@@ -22,8 +22,8 @@ android {
         applicationId = "dev.directonly.app"
         minSdk = 24
         targetSdk = 36
-        versionCode = 21
-        versionName = "3.7.0"
+        versionCode = 22
+        versionName = "4.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -83,9 +83,8 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-        // The usage limits key on local calendar dates, and java.time is API 26+ while
-        // minSdk is 24. Desugaring is preferable to hand-rolling date arithmetic in code
-        // that decides whether the app opens at all.
+        // BlockerStats keys usage counts to local calendar dates, and java.time is API 26+
+        // while minSdk is 24.
         isCoreLibraryDesugaringEnabled = true
     }
 
@@ -117,14 +116,10 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.core:core-ktx:1.18.0")
-    implementation("androidx.webkit:webkit:1.16.0")
 
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     testImplementation("junit:junit:4.13.2")
-    // android.jar ships org.json as a stub that throws "not mocked" on every call, so any
-    // JVM test touching JSONObject needs the real implementation on the test classpath.
-    testImplementation("org.json:json:20250107")
 }

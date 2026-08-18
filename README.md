@@ -1,56 +1,47 @@
 # ClearFeed
 
-ClearFeed is one permanent, low-distraction Android gateway for the useful parts of Instagram, YouTube, and Facebook. It uses the providers' current websites in a hardened Android WebView. There is no unrestricted mode, and no server holds your data — the only network destination ClearFeed itself can reach is an optional, off-by-default failure-report endpoint described under [Privacy and permissions](#privacy-and-permissions).
+ClearFeed watches the real YouTube app in the background and sends you back to your home
+screen the moment its Shorts player opens. It does not reimplement YouTube, does not run a
+sandboxed browser, and does not request a single Android permission — it uses an Accessibility
+Service to detect one screen and react to it.
 
-| Platform | Allowed | Removed |
-|---|---|---|
-| Instagram | Direct Messages, supported DM attachments, and the exact Reel/post deliberately opened from a DM | Home, Feed, Explore, Stories, profiles, arbitrary posts/Reels, recommendations, adjacent items and every unknown route |
-| YouTube | Subscriptions, explicit Search, and a normal video deliberately selected from either | Home, Shorts, channels/playlists, comments, related/recommended videos, autoplay-next and end-screen recommendations |
-| Facebook | Newest Feeds from followed sources, Messages, Search, Notifications, Friends/Pages/Groups/Events, and at most 8 safe non-video stream posts | Ranked Home, Reels, Stories, Watch/video/live, Marketplace, Gaming, recommendation filler, Feed video and infinite streams |
+This is a personal-use, sideloaded app: no Play Store distribution, no backend, no analytics,
+no network access of any kind.
 
-The restrictions above are fixed policy, not preferences. There is no filter switch, temporary unlock, feed-limit setting, or path to a normal social-media mode.
+## Why this exists, and why it changed shape
 
-On top of them you can set your own usage limits per service under More options → Usage and
-limits: a daily time budget, hours the service may open at all, a pause before it opens, and
-a minimum gap between sessions. Tightening a limit applies immediately; loosening one applies
-tomorrow, because the moment you want more time is the moment the limit is working. Usage is
-counted and stored only on the device, and the same screen shows the last seven days.
+ClearFeed originally wrapped Instagram, YouTube, and Facebook in a hardened WebView and tried
+to allowlist which pages could load and strip distracting elements from the DOM. That
+approach chased three providers' web markup through every redesign, broke in ways that were
+only debuggable after the fact, and — even when working — never gave you the real apps
+(no push notifications, no camera roll, none of what makes the official apps actually usable
+day to day).
 
-## Verified routes and page filtering
-
-ClearFeed decides what may load in two independent layers. The native Kotlin URL policy is
-authoritative: it is deterministic, does not depend on provider markup, and a route it
-refuses is never shown. The injected page guard then removes feeds, recommendations, videos
-and other distraction surfaces from within an allowed page.
-
-If the guard cannot confirm a page within a couple of seconds — usually because a provider
-changed its markup — ClearFeed shows the page anyway, marks it "Reduced filtering", and keeps
-sanitizing in the background. Earlier versions kept such a page hidden indefinitely, which
-turned any provider redesign into a blank screen or a stuck spinner. A page whose URL the
-policy refuses is still never revealed.
-
-The More options menu includes local, privacy-redacted diagnostics for WebView, HTTP, TLS, renderer,
-and protected-interface failures. Diagnostics are recorded on the device and contain no query strings,
-fragments, message identifiers, or page content.
-
-Diagnostics stay on the device unless you turn on **Send failure reports** in the Diagnostics dialog.
-That switch is off by default. While it is on, only failure events are transmitted — never the
-`CF-STAGE-*` navigation stages — to the maintainer's endpoint, carrying the app/Android/WebView
-versions, the service name, a failure code, a host plus first path segment, and a bounded
-description. See [SECURITY.md](SECURITY.md) and [`public/privacy.html`](public/privacy.html).
+The current approach: let the official YouTube app run exactly as published, and use an
+Android Accessibility Service to detect its Shorts player and get you out of it. This is the
+same mechanism blockers like NoScroll, Opal, and One Sec use — not a workaround, the standard
+tool for this problem. The full history of the WebView approach, including its extensive test
+suite, is preserved in this repository's git history if it's ever useful again.
 
 ## How it works
 
-- A native Compose launcher creates only the selected service's WebView and destroys it when returning home. Normal domain-scoped WebView cookies and storage keep sessions signed in.
-- A pure Kotlin HTTPS/host/path policy checks every main-frame request, redirect, commit, SPA update, resume, retry, and Back transition.
-- Origin-restricted AndroidX WebKit messaging carries authenticated route, deliberate-selection, and guard-health events. ClearFeed never installs `addJavascriptInterface`.
-- Per-platform scripts run at document start, wrap SPA history, intercept clicks, and continuously sanitize regenerated DOM, including anchors whose `href` is swapped in place.
-- Instagram unknown routes fail closed. A genuine tap on a supported Reel/post inside an exact Direct thread mints one short-lived, in-memory capability for that stable content ID. The sealed viewer removes adjacent/recommended content, blocks vertical Reel gestures and autoplay-next, then consumes the capability when returning to the origin thread.
-- YouTube watch URLs require a short-lived native authorization for the exact video ID selected on Subscriptions or Search.
-- Facebook starts on the live-verified newest Feeds route. It performs URL and DOM/content classification before reveal; video/Reel/Story/recommendation cards are removed and the lifetime stream count stops at eight.
-- A centralized protected-social router intercepts Instagram, YouTube, Facebook, Messenger, redirect-wrapper, popup and recoverable app-deep-link destinations. Each target is re-evaluated by its own policy; normal YouTube videos can receive one exact intentional-watch token, while Shorts, Facebook video and non-DM Instagram content remain blocked. Only unrelated HTTPS URLs can reach the external-browser confirmation.
+- `ShortsAccessibilityService` receives window-change events from the system whenever
+  YouTube's foreground screen changes.
+- `AccessibilityNodeWalker` turns the current screen into a bounded snapshot of structural
+  view identifiers only — resource ids and class names. It never reads visible text,
+  captions, or content.
+- `ShortsDetector` (pure Kotlin, fully unit-tested) classifies the snapshot. A match sends the
+  user home via `performGlobalAction(GLOBAL_ACTION_HOME)`.
+- Detection is deliberately conservative: it matches on structural ids specific to the Shorts
+  player surface, never on visible text — YouTube's bottom navigation tab is permanently
+  labelled "Shorts" even on the Home screen, so text-based matching would misfire constantly.
+- Every action, and every YouTube screen that was *not* detected as Shorts, is logged to a
+  local, in-memory activity trace (`BlockerDiagnostics`), viewable and shareable from the app.
+  Nothing is transmitted automatically. This is how detection gets corrected if it's ever
+  wrong on a real device: there is no reliable way to inspect a live YouTube view hierarchy
+  without one.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY.md](SECURITY.md), and [TESTING.md](TESTING.md).
+See [TESTING.md](TESTING.md) for what's actually verified and what remains manual.
 
 ## Build
 
@@ -60,12 +51,8 @@ Requirements:
 - Android SDK Platform 36
 - Android SDK Build Tools 35.0.0 or newer
 
-From PowerShell:
-
-```powershell
-$env:JAVA_HOME = 'C:\Program Files\Microsoft\jdk-17.0.20.8-hotspot'
-$env:ANDROID_SDK_ROOT = "$env:LOCALAPPDATA\Android\Sdk"
-.\gradlew.bat testDebugUnitTest lintDebug assembleDebug assembleRelease
+```bash
+./gradlew testDebugUnitTest lintDebug assembleDebug assembleRelease
 ```
 
 Artifacts:
@@ -77,57 +64,58 @@ app/build/outputs/apk/release/app-release-unsigned.apk
 
 Release signing credentials are intentionally not stored in the repository.
 
-For professional distribution, use the signed App Bundle and Google Play internal testing workflow in
-[`PLAY_STORE.md`](PLAY_STORE.md). Vercel is useful for a public privacy-policy page, not for running the app.
-
 ## Install or update
-
-The production application ID remains `dev.directonly.app`; the debug ID is
-`dev.directonly.app.debug`.
 
 ```bash
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-`-r` requests an in-place update and preserves WebView app data, so sign-ins survive.
+`-r` requests an in-place update.
 
 ### Debug builds use a fixed signing key
 
-`clearfeed-debug.keystore` is committed and the `debug` build type is configured to use it.
-Android's default is a keystore generated per machine, which means a debug APK built on
-another computer, in CI, or in a fresh checkout is signed with a different key — and Android
-refuses to install it over an existing app:
+`clearfeed-debug.keystore` is committed and the `debug` build type signs with it. Android's
+default is a keystore generated per machine, so a debug APK built anywhere else is signed
+with a different key, and Android refuses to install it over an existing app
+("App not installed as package conflicts with an existing package"). Pinning the key makes any
+machine — this one, yours, CI — produce an installable update. Only the `.debug` application
+ID is signed with it; a release key is never stored in the repository.
 
-> App not installed as package conflicts with an existing package.
+### Enabling the blocker
 
-Pinning the key makes any machine produce an installable update. Only the `.debug`
-application ID is signed with it; the release key is never stored in the repository.
+Open the app and tap **Open Accessibility Settings**, then enable ClearFeed's Shorts blocker.
 
-**One-time migration.** A debug build installed before this change was signed with a
-different key, so the first install of a pinned build still fails with the message above.
-Uninstall the old debug app once and install fresh:
-
-```bash
-adb uninstall dev.directonly.app.debug
-adb install app/build/outputs/apk/debug/app-debug.apk
-```
-
-That clears WebView data, so every service needs signing in again — once. Updates after
-that install in place and keep sessions.
+Android restricts this for any app installed outside the Play Store (Android 13+). If the
+setting looks greyed out or Android says it's "currently unavailable for your security": open
+**App info → ⋮ menu (top right) → Allow restricted settings**, then go back and enable it.
+That's an Android requirement, not something ClearFeed can skip — the in-app screen explains
+this same step.
 
 ## Privacy and permissions
 
-Provider pages handle sign-in and content. ClearFeed does not read passwords, export cookies, log messages, include analytics or advertising SDKs, or use private social APIs. The only data it can ever send off the device is the opt-in failure report described above. Camera/microphone and the system file picker are available only on an active Instagram Direct or Facebook/Messenger conversation route. YouTube playback never receives capture permission.
+ClearFeed requests zero Android permissions. It has no `INTERNET` permission, so it cannot
+make a network request even if it wanted to. The accessibility service reads only structural
+view identifiers (resource ids, class names) from YouTube's screen — never text, captions,
+video titles, or account information — and nothing it reads leaves the device. See
+[`public/privacy.html`](public/privacy.html).
 
-## Important limitations
+## Known limits
 
-- Provider routes and DOM change. ClearFeed fails closed whenever its native URL policy cannot prove a route safe. If only the page-level guard cannot confirm, the page is shown as "Reduced filtering" rather than withheld, so a provider redesign degrades filtering instead of breaking the app.
-- Browser versions of messaging sites may not provide every native-app feature, notification, E2EE flow, or attachment format.
-- The eight-post Facebook cap is a per-loaded stream lifetime guard, not an account-wide or daily quota.
-- ClearFeed controls only its own WebView. It cannot stop the device owner from using official apps, Chrome, another device, or uninstalling ClearFeed. Optional phone-level ideas are documented in [HARDENING.md](HARDENING.md).
-
-Compatibility observations are recorded in [INSTAGRAM_COMPATIBILITY.md](INSTAGRAM_COMPATIBILITY.md), [YOUTUBE_COMPATIBILITY.md](YOUTUBE_COMPATIBILITY.md), and [FACEBOOK_COMPATIBILITY.md](FACEBOOK_COMPATIBILITY.md).
+- **YouTube Shorts only, for now.** Instagram Reels and Facebook Reels are not covered.
+  `ShortsDetector`'s resource-id signals are specific to YouTube's Shorts player; extending
+  coverage means adding a similarly-scoped detector per app.
+- **Detection depends on YouTube's current view hierarchy**, assembled without access to a
+  live, current build of the app. It can miss (fails open — Shorts plays normally) or, in
+  principle, over-match (fails toward disruption) if a resource id changes meaning between
+  YouTube versions. The activity log exists specifically to catch and correct this.
+- **Global Home is blunt.** It exits YouTube entirely rather than just leaving Shorts, matching
+  what was asked for ("kick me out of the app"), but it means there's no way back to
+  Subscriptions without reopening YouTube.
+- Enabling the accessibility service is a manual, one-time step Android requires; ClearFeed
+  cannot enable it automatically.
 
 ## License
 
-ClearFeed's original code and branding are available under the MIT License. Instagram and Facebook are trademarks of Meta Platforms, Inc.; YouTube and Google are trademarks of Google LLC. This independent project is not affiliated with or endorsed by those companies.
+ClearFeed's original code and branding are available under the MIT License. YouTube is a
+trademark of Google LLC. This independent project is not affiliated with or endorsed by
+Google.
