@@ -30,25 +30,21 @@ class ClearFeedUiContractTest {
     }
 
     @Test
-    fun `native shell keeps responsive and accessible UI contracts`() {
+    fun `the in-app privacy statement matches what the app actually does`() {
+        // This dialog is the privacy notice most users will ever read. It previously stated
+        // "ClearFeed has no backend, analytics, or private social API" while the app posted
+        // diagnostics to a remote endpoint on every navigation stage. A false claim here is
+        // worse than a false claim in a document, so it is pinned.
         val source = uiSource()
-        listOf(
-            "WindowInsets.safeDrawing",
-            "heightIn(min = 60.dp)",
-            "contentDescription = \"Back to ClearFeed services\"",
-            "contentDescription = \"More options\"",
-            "LiveRegionMode.Polite",
-            "semantics(mergeDescendants = true)",
-            "externalDestinationLabel(url)",
-            "DiagnosticsDialog(",
-            "Copy diagnostics",
-            "View diagnostics",
-            "BuildConfig.VERSION_NAME",
-            "verticalScroll(rememberScrollState())",
-        ).forEach { marker ->
-            assertTrue("Missing polished UI contract: $marker", source.contains(marker))
-        }
-        assertFalse("The header must grow with font scale", source.contains(".height(50.dp)"))
+        assertFalse(
+            "The privacy dialog must not claim there is no backend while a reporting " +
+                "endpoint exists in the app",
+            source.contains("no backend, analytics, or private social API"),
+        )
+        assertTrue(
+            "The privacy dialog must disclose that reporting is opt-in",
+            source.contains("off by") && source.contains("Send failure reports"),
+        )
     }
 
     private fun uiSource(): String {

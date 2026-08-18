@@ -46,6 +46,32 @@ class YouTubeNavigationPolicyTest {
     }
 
     @Test
+    fun `an intentional token authorizes one video and never a queued player mode`() {
+        val context = NavigationContext(allowedYouTubeVideoId = "dQw4w9WgXcQ")
+        // The capability is for one video ID, not for the surrounding player mode.
+        // A playlist or radio queue auto-advances and defeats the one-video promise.
+        listOf(
+            "https://m.youtube.com/watch?v=dQw4w9WgXcQ&list=PL1234567890",
+            "https://m.youtube.com/watch?list=PL1234567890&v=dQw4w9WgXcQ",
+            "https://m.youtube.com/watch?v=dQw4w9WgXcQ&start_radio=1&list=RDdQw4w9WgXcQ",
+            "https://m.youtube.com/watch?v=dQw4w9WgXcQ&playlist=abc123def456",
+            "https://m.youtube.com/watch?v=dQw4w9WgXcQ&index=4&list=PL1234567890",
+        ).forEach { url ->
+            val decision = policy.evaluate(url, PolicyMode.CONTENT, context)
+            assertEquals("Expected block for $url", NavigationDisposition.BLOCK, decision.disposition)
+            assertFalse("Expected block for $url", decision.mayLoadInWebView)
+        }
+        // The plain authorized watch URL, and benign playback parameters, still work.
+        listOf(
+            "https://m.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://m.youtube.com/watch?v=dQw4w9WgXcQ&t=42s",
+            "https://m.youtube.com/watch?persist_app=1&v=dQw4w9WgXcQ",
+        ).forEach { url ->
+            assertTrue("Expected allow for $url", policy.evaluate(url, PolicyMode.CONTENT, context).mayLoadInWebView)
+        }
+    }
+
+    @Test
     fun `home shorts recommendation and channel surfaces stay blocked`() {
         listOf(
             "https://m.youtube.com/",

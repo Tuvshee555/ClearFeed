@@ -13,6 +13,7 @@
   const AUTH_HOSTS = new Set(['accounts.google.com', 'consent.google.com', 'consent.youtube.com']);
   let lastHref = location.href;
   let scanQueued = false;
+  let pendingScanRoot = null;
   let healthTimer = 0;
   let trustedGestureActive = false;
 
@@ -181,12 +182,26 @@
   }
 
   function queueScan(root) {
-    if (scanQueued) return;
+    // A scoped root is only valid while it is the single pending root. Dropping later
+    // roots left whole subtrees unsanitized during SPA hydration, because the winning
+    // scan does not cover them. Widen to the document instead of discarding them.
+    if (scanQueued) {
+      pendingScanRoot = document.documentElement;
+      return;
+    }
     scanQueued = true;
+    pendingScanRoot = root || document.documentElement;
     window.setTimeout(() => {
+      const target = pendingScanRoot || document.documentElement;
       scanQueued = false;
-      sanitize(root || document.documentElement);
-      reportHealth();
+      pendingScanRoot = null;
+      // reportHealth must run even when sanitize throws, otherwise a single DOM
+      // surprise silently starves native of health and the guard timeout fires.
+      try {
+        sanitize(target);
+      } finally {
+        reportHealth();
+      }
     }, 60);
   }
 
@@ -281,11 +296,26 @@
   }, true);
 
   const observer = new MutationObserver(records => {
-    for (const record of records) for (const node of record.addedNodes) {
-      if (node.nodeType === Node.ELEMENT_NODE) queueScan(node);
+    for (const record of records) {
+      if (record.type === 'attributes') {
+        queueScan(record.target?.nodeType === Node.ELEMENT_NODE ? record.target : null);
+        continue;
+      }
+      for (const node of record.addedNodes) {
+        if (node.nodeType === Node.ELEMENT_NODE) queueScan(node);
+      }
     }
   });
-  observer.observe(document.documentElement, { childList: true, subtree: true });
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    // React and Relay recycle anchor nodes and swap href/aria-label in place. Observing
+    // childList alone meant a recycled anchor that had already been scanned was never
+    // re-evaluated, so a node left visible for a safe route stayed visible after it was
+    // pointed at a blocked one.
+    attributes: true,
+    attributeFilter: ['href', 'aria-label'],
+  });
   window.addEventListener('popstate', auditLocation, true);
   window.addEventListener('pageshow', () => { auditLocation(); queueScan(document.documentElement); });
   document.addEventListener('DOMContentLoaded', () => queueScan(document.documentElement), { once: true });

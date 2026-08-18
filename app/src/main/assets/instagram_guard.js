@@ -30,6 +30,7 @@
 
   let lastHref = location.href;
   let scanQueued = false;
+  let pendingScanRoot = null;
   let healthTimer = 0;
   let sealedStream = null;
   let sealedStreamItem = null;
@@ -191,10 +192,14 @@
   function inDirectMessageSurface(anchor) {
     if (!isDirectThread(location.href) || !anchor.closest('main')) return false;
     if (anchor.closest('nav,header,[role="navigation"]')) return false;
+    // `main` must not appear here: the guard above already proved the anchor is inside
+    // `main`, so including it made this an unconditional `true` and every element of the
+    // message-bubble allowlist dead. A recommendation strip or shared-profile card in the
+    // thread body would then be treated as a genuine DM tap and mint a capability.
     return Boolean(
       anchor.closest(
         '[role="row"],[role="listitem"],article,[data-testid*="message" i],' +
-        '[aria-label*="message" i],main'
+        '[aria-label*="message" i]'
       )
     );
   }
@@ -222,7 +227,9 @@
         identity.contentId === SEALED?.contentId;
       if (exactIdentity) {
         candidate.hash = `clearfeed_shared=${SEALED.token}`;
-        anchor.href = candidate.href;
+        // Only assign on a real change. An idempotent write still emits a mutation
+        // record, which would feed back into the href-attribute observer forever.
+        if (anchor.href !== candidate.href) anchor.href = candidate.href;
       }
       const exactItem = isExactSealedItem(candidate.href);
       const decision = RULES.instagramSealedLinkDecision({ isExactApprovedItem: exactItem });
@@ -406,6 +413,31 @@
     sanitizeSealedViewer();
   }
 
+  /**
+   * Whether the Direct inbox has painted something recognisable.
+   *
+   * This used to require `[aria-label="Thread list"]` exactly. That is one English,
+   * case-sensitive Instagram string: aria-labels are localized, so on a phone set to any
+   * other language it never matched, and Instagram is free to rename it at any time. When
+   * it missed, the inbox never reported healthy and the page stayed hidden until the
+   * watchdog fired — a confirmed CF-GUARD-TIMEOUT on a signed-in inbox.
+   *
+   * The checks below are structural and language-independent, ordered strongest first.
+   * The point is only to avoid revealing a blank or half-painted page, so the last resort
+   * is simply "main has rendered content".
+   */
+  function directInboxIsReady() {
+    const main = document.querySelector('main');
+    if (!main) return false;
+    if (main.querySelector('a[href^="/direct/t/"]')) return true;
+    if (main.querySelector('[role="list"],[role="listbox"],[role="grid"],[aria-label*="thread" i]')) {
+      return true;
+    }
+    // An inbox with no conversations still renders copy, and an avatar-only row still
+    // renders an image.
+    return main.textContent.trim().length > 0 || Boolean(main.querySelector('img,svg,canvas'));
+  }
+
   function reportHealth() {
     clearTimeout(healthTimer);
     healthTimer = window.setTimeout(() => {
@@ -415,7 +447,7 @@
       if (kind === 'direct') {
         healthy = Boolean(document.querySelector('main'));
         if (normalizePath(new URL(location.href)) === '/direct/inbox/') {
-          healthy = healthy && Boolean(document.querySelector('[aria-label="Thread list"]'));
+          healthy = healthy && directInboxIsReady();
         }
       } else if (kind === 'shared') {
         const main = document.querySelector('main');
@@ -430,12 +462,26 @@
   }
 
   function queueScan(root) {
-    if (scanQueued) return;
+    // A scoped root is only valid while it is the single pending root. Dropping later
+    // roots left whole subtrees unsanitized during SPA hydration, because the winning
+    // scan does not cover them. Widen to the document instead of discarding them.
+    if (scanQueued) {
+      pendingScanRoot = document.documentElement;
+      return;
+    }
     scanQueued = true;
+    pendingScanRoot = root || document.documentElement;
     window.setTimeout(() => {
+      const target = pendingScanRoot || document.documentElement;
       scanQueued = false;
-      sanitize(root || document.documentElement);
-      reportHealth();
+      pendingScanRoot = null;
+      // reportHealth must run even when sanitize throws, otherwise a single DOM
+      // surprise silently starves native of health and the guard timeout fires.
+      try {
+        sanitize(target);
+      } finally {
+        reportHealth();
+      }
     }, 55);
   }
 
@@ -575,11 +621,26 @@
   }, true);
 
   const observer = new MutationObserver(records => {
-    for (const record of records) for (const node of record.addedNodes) {
-      if (node.nodeType === Node.ELEMENT_NODE) queueScan(node);
+    for (const record of records) {
+      if (record.type === 'attributes') {
+        queueScan(record.target?.nodeType === Node.ELEMENT_NODE ? record.target : null);
+        continue;
+      }
+      for (const node of record.addedNodes) {
+        if (node.nodeType === Node.ELEMENT_NODE) queueScan(node);
+      }
     }
   });
-  observer.observe(document.documentElement, { childList: true, subtree: true });
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    // React and Relay recycle anchor nodes and swap href/aria-label in place. Observing
+    // childList alone meant a recycled anchor that had already been scanned was never
+    // re-evaluated, so a node left visible for a safe route stayed visible after it was
+    // pointed at a blocked one.
+    attributes: true,
+    attributeFilter: ['href', 'aria-label'],
+  });
 
   window.addEventListener('popstate', () => {
     auditLocation();

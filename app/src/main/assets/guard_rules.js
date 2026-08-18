@@ -18,13 +18,21 @@
     '/reel/', '/reels/', '/watch/', '/watch.php', '/video/', '/video.php',
     '/videos/', '/live/', '/stories/', '/story.php'
   ];
+  const MAX_TEXT_SAMPLE = 8000;
   const FACEBOOK_RECOMMENDATION_TEXT =
     /suggested for you|suggested posts?|reels for you|videos for you|people you may know|pages you may like|groups you should join|recommended (?:groups|pages)|discover (?:more|something new)|because you watched/i;
 
   function facebookFeedRouteDecision(rawPath, rawSearch) {
     const path = String(rawPath || '/');
     if (path !== '/') return 'not_feed';
-    const params = new URLSearchParams(String(rawSearch || '').replace(/^\?/, ''));
+    const search = String(rawSearch || '').replace(/^\?/, '');
+    // A bare root is where Facebook drops a freshly signed-in session, and where mobile
+    // canonicalizes the verified feed URL back to. Treating it as ranked Home meant the
+    // guard concealed the page immediately after every login. A root carrying any query is
+    // still asking for something specific and must name the complete verified pair.
+    // Mirrors FacebookNavigationPolicy.evaluate.
+    if (search === '') return 'newest_feed';
+    const params = new URLSearchParams(search);
     const filters = new Set(['all', 'favorites', 'friends', 'groups', 'pages']);
     return params.get('sk') === 'h_chr' && filters.has(params.get('filter')) ?
       'newest_feed' : 'ranked_home_block';
@@ -77,9 +85,13 @@
     const targetPath = String(snapshot.targetPath || '/');
     const targetKind = String(snapshot.targetKind || 'blocked');
     const currentKind = String(snapshot.currentKind || 'blocked');
+    // External hosts are classified first. The path tests below are YouTube-specific,
+    // and `targetPath === '/'` matched the root of every external host too, so an
+    // ordinary sign-in entry point such as accounts.google.com/ was reported as blocked
+    // instead of being routed.
+    if (targetKind === 'external') return 'external';
     if (targetPath === '/' || targetPath.startsWith('/shorts/') ||
         targetPath.startsWith('/feed/trending/')) return 'hide_block';
-    if (targetKind === 'external') return 'external';
     if (targetKind === 'watch') {
       if ((currentKind === 'subscriptions' || currentKind === 'search') &&
           !snapshot.inRecommendation) return 'intentional_watch';
@@ -104,7 +116,11 @@
     if ((snapshot.labels || []).some(label => /reel|play video|story/i.test(String(label)))) {
       return 'hide_unsafe';
     }
-    if (FACEBOOK_RECOMMENDATION_TEXT.test(String(snapshot.text || '').slice(0, 500))) {
+    // Scan the whole sampled text, not just its first 500 characters. Recommendation
+    // markers ("Suggested for you", "Because you watched") frequently sit *below* a long
+    // caption, so a 500-character window let those cards through. The cap is now generous
+    // enough to cover a real card while still bounding regex work on pathological input.
+    if (FACEBOOK_RECOMMENDATION_TEXT.test(String(snapshot.text || '').slice(0, MAX_TEXT_SAMPLE))) {
       return 'hide_unsafe';
     }
     return 'keep';

@@ -117,8 +117,24 @@ class DirectOnlyNavigationPolicy(
         rawUrl: String?,
         mode: PolicyMode,
         context: NavigationContext,
-    ): Boolean = classifier.isTrustedInstagramOrigin(rawUrl) &&
-        evaluate(rawUrl, mode, context).mayLoadInWebView
+    ): Boolean {
+        val normalized = (UrlNormalizer.normalize(rawUrl) as? UrlNormalizationResult.Valid)?.value
+            ?: return false
+        if (normalized.scheme != "https") return false
+        // Instagram's own media CDNs and the reCAPTCHA widget load as subframes on the
+        // login and challenge routes this policy deliberately allows. Requiring the
+        // subframe to satisfy the main-frame *route* policy cancelled them, which can
+        // dead-end sign-in. Mirrors the CDN allowlists in the YouTube and Facebook
+        // policies; a subframe host is never a navigable top-level destination.
+        val host = normalized.host
+        if (host.endsWith(".cdninstagram.com") || host.endsWith(".fbcdn.net") ||
+            host.endsWith(".gstatic.com") || host == "www.google.com" || host == "google.com"
+        ) {
+            return true
+        }
+        return classifier.isTrustedInstagramOrigin(rawUrl) &&
+            evaluate(rawUrl, mode, context).mayLoadInWebView
+    }
 
     fun createSharedContentApproval(
         rawSharedUrl: String,

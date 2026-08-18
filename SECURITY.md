@@ -19,11 +19,32 @@ ClearFeed treats provider HTML, links, redirects, popups, SPA routing, shared ca
 - File/content URL access and mixed content disabled; SSL errors canceled; Safe Browsing enabled; geolocation denied; popup WebViews, automatic downloads, and social link context menus refused.
 - Release WebView debugging disabled using `BuildConfig.DEBUG`.
 - App/WebView data excluded from Android backup and device transfer.
-- No ads, analytics, crash SDK, backend, cloud database, private social API, cookie export, clipboard monitoring, accessibility service, notification listener, device admin, or device owner.
+- No ads, analytics, crash SDK, cloud database, private social API, cookie export, clipboard monitoring, accessibility service, notification listener, device admin, or device owner. The single outbound destination ClearFeed itself can reach is the opt-in failure-report endpoint below; it is off by default and stores nothing but log lines.
 
-Local diagnostics are failure-only and memory-only. Copied reports contain the app, Android, and System
-WebView versions; a short failure code; the selected service; and a redacted host/first-path segment.
-Queries, fragments, message/thread identifiers, page content, credentials, and cookies are excluded.
+Local diagnostics are memory-only and cover both failures and navigation stages. Copied reports contain
+the app, Android, and System WebView versions; a short code; the selected service; and a redacted
+host/first-path segment. Queries, fragments, message/thread identifiers, page content, credentials, and
+cookies are excluded.
+
+### Opt-in failure reporting
+
+`RemoteDiagnosticsReporter` can POST a diagnostic to a maintainer-operated endpoint. It is governed by
+a persisted preference that **defaults to off** (`DiagnosticsPreferences`), surfaced as "Send failure
+reports" in the Diagnostics dialog. Two independent conditions gate every send:
+
+1. the preference is on, and
+2. `isFailureDiagnostic(code)` is true — that is, the code is not a `CF-STAGE-*` progress stage.
+
+The second condition matters as much as the first. Transmitting the progress stages alongside the
+per-process session identifier produced a server-side timeline of which service was opened and when,
+which is behavioural telemetry regardless of how well individual fields are redacted. Stage events are
+still recorded locally for the dialog; they are never sent.
+
+Transmitted fields are exactly those in the local report plus a per-process random session identifier.
+Field-level redaction is performed by `privacySafeLocation` (host and first path segment only) and
+`safeDiagnosticDetail` (whitespace-collapsed, 180 characters). The requesting IP address is visible to
+the endpoint and cannot be redacted by the app; turning the switch off is the only way to withhold it.
+Sending happens on a background executor, and the reporter is shut down from `ClearFeedCoordinator.onDestroy`.
 
 ## Platform-specific controls
 

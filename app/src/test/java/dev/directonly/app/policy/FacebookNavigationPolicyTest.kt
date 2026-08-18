@@ -55,8 +55,12 @@ class FacebookNavigationPolicyTest {
         )
         assertEquals(NavigationDisposition.ALLOW_CONTENT, canonicalPostLoginFeed.disposition)
         assertEquals(RouteKind.FACEBOOK_FEED, canonicalPostLoginFeed.routeKind)
+        // The bare root is the feed landing in AUTHENTICATING mode too. This assertion used
+        // to expect BLOCK, which is exactly what made every successful sign-in bounce
+        // through recoverToSafeRoot: Facebook drops the user on `/` while the mode is still
+        // AUTHENTICATING. Ranked Home stays blocked through `/?sk=nf`, asserted above.
         assertEquals(
-            NavigationDisposition.BLOCK,
+            NavigationDisposition.ALLOW_CONTENT,
             policy.evaluate("https://www.facebook.com/", PolicyMode.AUTHENTICATING).disposition,
         )
         assertEquals(
@@ -80,6 +84,126 @@ class FacebookNavigationPolicyTest {
             "https://www.facebook.com/marketplace/",
             "https://www.facebook.com/gaming/",
         ).forEach(::assertBlocked)
+    }
+
+    @Test
+    fun `the post-login landing on the bare root is the feed in every mode`() {
+        // Facebook drops a freshly signed-in session on `/`, at which point policyMode is
+        // still AUTHENTICATING. Allowing that only in CONTENT mode made every sign-in a
+        // BLOCK, which bounced the user through recoverToSafeRoot and, when the guard then
+        // failed to verify, straight back around again.
+        listOf(PolicyMode.AUTHENTICATING, PolicyMode.CONTENT, PolicyMode.DIRECT).forEach { mode ->
+            val decision = policy.evaluate("https://m.facebook.com/", mode)
+            assertEquals("bare root in $mode", RouteKind.FACEBOOK_FEED, decision.routeKind)
+            assertTrue("bare root must load in $mode", decision.mayLoadInWebView)
+        }
+    }
+
+    @Test
+    fun `only a bare root is a landing and every other root query stays refused`() {
+        // A root carrying a query is asking for something specific, including a redirect
+        // target, so it is refused and recovery canonicalizes to the verified feed instead.
+        listOf(
+            "https://www.facebook.com/?sk=nf",
+            "https://www.facebook.com/?filter=all",
+            "https://www.facebook.com/?sk=h_chr",
+            "https://www.facebook.com/?filter=unknown&sk=h_chr",
+            "https://www.facebook.com/?next=/reels/",
+        ).forEach(::assertBlocked)
+        assertTrue(
+            policy.evaluate("https://www.facebook.com/?filter=all&sk=h_chr", PolicyMode.CONTENT)
+                .mayLoadInWebView,
+        )
+    }
+
+    @Test
+    fun `plausible usernames are not mistaken for reserved surfaces`() {
+        // A previous over-broad reserved list swallowed ordinary words that are perfectly
+        // valid Facebook usernames, so real profiles stopped opening.
+        listOf("news", "music", "sports", "notes", "topic", "weather", "jobs", "offers", "terms")
+            .forEach { username ->
+                val decision = policy.evaluate("https://www.facebook.com/$username/", PolicyMode.CONTENT)
+                assertEquals("/$username/ is a profile", RouteKind.FACEBOOK_PAGE, decision.routeKind)
+                assertTrue("/$username/ must load", decision.mayLoadInWebView)
+            }
+    }
+
+    @Test
+    fun `capitalized blocked routes cannot slip past the lowercase prefix list`() {
+        // Facebook serves its paths case-insensitively, so a single capital letter
+        // must not turn a blocked video surface into an allowed profile route.
+        listOf(
+            "https://www.facebook.com/Reels/",
+            "https://www.facebook.com/REELS/",
+            "https://www.facebook.com/Reel/123456789/",
+            "https://www.facebook.com/Watch/",
+            "https://www.facebook.com/WATCH/",
+            "https://www.facebook.com/Videos/123456789/",
+            "https://www.facebook.com/Video/123456789/",
+            "https://www.facebook.com/Live/",
+            "https://www.facebook.com/Stories/example/123/",
+            "https://www.facebook.com/Marketplace/",
+            "https://www.facebook.com/Gaming/",
+            "https://www.facebook.com/Home.php",
+        ).forEach(::assertBlocked)
+    }
+
+    @Test
+    fun `bare discovery directories fail closed instead of passing as profiles`() {
+        // The single-segment profile route must not admit Facebook's own
+        // recommendation and discovery surfaces.
+        listOf(
+            "https://www.facebook.com/groups/",
+            "https://www.facebook.com/events/",
+            "https://www.facebook.com/pages/",
+            "https://www.facebook.com/watch_videos/",
+            "https://www.facebook.com/dating/",
+            "https://www.facebook.com/games/",
+            "https://www.facebook.com/photos/",
+            "https://www.facebook.com/saved/",
+            "https://www.facebook.com/memories/",
+            "https://www.facebook.com/friends_center/",
+            "https://www.facebook.com/groups/feed/",
+            "https://www.facebook.com/groups/discover/",
+        ).forEach(::assertBlocked)
+    }
+
+    @Test
+    fun `intentional profiles pages groups and events still resolve`() {
+        // The fix for the discovery directories must not break the surfaces
+        // README documents as allowed.
+        mapOf(
+            "https://www.facebook.com/zuck/" to RouteKind.FACEBOOK_PAGE,
+            "https://www.facebook.com/example.page/" to RouteKind.FACEBOOK_PAGE,
+            "https://www.facebook.com/pages/Example-Page/123456789/" to RouteKind.FACEBOOK_PAGE,
+            "https://www.facebook.com/groups/example.group/" to RouteKind.FACEBOOK_GROUP,
+            "https://www.facebook.com/groups/123456789/posts/987654321/" to RouteKind.FACEBOOK_GROUP,
+            "https://www.facebook.com/events/123456789/" to RouteKind.FACEBOOK_EVENT,
+        ).forEach { (url, kind) ->
+            val decision = policy.evaluate(url, PolicyMode.CONTENT)
+            assertEquals("Wrong route for $url", kind, decision.routeKind)
+            assertTrue("Expected allowed route: $url", decision.mayLoadInWebView)
+        }
+    }
+
+    @Test
+    fun `video search results are blocked even though search is allowed`() {
+        assertBlocked("https://www.facebook.com/search/videos/?q=example")
+        assertEquals(
+            RouteKind.FACEBOOK_SEARCH,
+            policy.evaluate("https://www.facebook.com/search/top?q=friend", PolicyMode.CONTENT).routeKind,
+        )
+    }
+
+    @Test
+    fun `a signed-in Messenger root is the inbox and not an authentication page`() {
+        val decision = policy.evaluate("https://www.messenger.com/", PolicyMode.CONTENT)
+        assertEquals(RouteKind.FACEBOOK_MESSAGES, decision.routeKind)
+        assertTrue(decision.mayLoadInWebView)
+        // While unauthenticated it must still be reachable as a sign-in surface.
+        assertTrue(
+            policy.evaluate("https://www.messenger.com/", PolicyMode.AUTHENTICATING).mayLoadInWebView,
+        )
     }
 
     @Test

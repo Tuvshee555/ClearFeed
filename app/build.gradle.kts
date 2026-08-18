@@ -22,13 +22,30 @@ android {
         applicationId = "dev.directonly.app"
         minSdk = 24
         targetSdk = 36
-        versionCode = 20
-        versionName = "3.6.5"
+        versionCode = 21
+        versionName = "3.7.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
+        // A fixed debug key committed to the repository.
+        //
+        // Android's default is a keystore auto-generated per machine, so a debug APK built
+        // anywhere else is signed with a different key, and Android refuses to update an
+        // installed app whose signature does not match: "App not installed as package
+        // conflicts with an existing package." That makes it impossible to ship a debug
+        // build from CI or from a fresh checkout without uninstalling first and losing every
+        // WebView session. Pinning the key means any machine produces an installable update.
+        //
+        // This grants no meaningful capability to anyone: it signs only the `.debug`
+        // application ID, and the release key is still kept out of the repository entirely.
+        create("debugShared") {
+            storeFile = rootProject.file("clearfeed-debug.keystore")
+            storePassword = "clearfeed"
+            keyAlias = "clearfeeddebug"
+            keyPassword = "clearfeed"
+        }
         if (releaseKeystorePropertiesFile.isFile) {
             create("release") {
                 storeFile = rootProject.file(requireNotNull(releaseKeystoreProperties.getProperty("storeFile")))
@@ -43,6 +60,7 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            signingConfig = signingConfigs.getByName("debugShared")
         }
         release {
             isMinifyEnabled = true
@@ -65,6 +83,10 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // The usage limits key on local calendar dates, and java.time is API 26+ while
+        // minSdk is 24. Desugaring is preferable to hand-rolling date arithmetic in code
+        // that decides whether the app opens at all.
+        isCoreLibraryDesugaringEnabled = true
     }
 
     packaging {
@@ -97,7 +119,12 @@ dependencies {
     implementation("androidx.core:core-ktx:1.18.0")
     implementation("androidx.webkit:webkit:1.16.0")
 
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     testImplementation("junit:junit:4.13.2")
+    // android.jar ships org.json as a stub that throws "not mocked" on every call, so any
+    // JVM test touching JSONObject needs the real implementation on the test classpath.
+    testImplementation("org.json:json:20250107")
 }

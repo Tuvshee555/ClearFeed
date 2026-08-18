@@ -6,7 +6,6 @@ html[data-clearfeed-blocked="true"] {
 [data-clearfeed-hidden="true"],
 ytm-reel-shelf-renderer,
 ytm-shorts-lockup-view-model,
-ytm-pivot-bar-item-renderer:has(.pivot-shorts),
 .pivot-shorts,
 a[href^="/shorts/"],
 a[href="/"],
@@ -17,6 +16,16 @@ ytm-autoplay-bar-renderer,
 .ytp-autonav-toggle-button,
 .ytp-endscreen-content,
 .ytp-ce-element {
+    display: none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
+
+/* `:has()` is kept in its own rule on purpose. CSS selector lists are not forgiving,
+   so an unsupported selector discards every other selector sharing the rule. Folded
+   into the block above, this would silently drop the [data-clearfeed-hidden] rule that
+   the guard's hide() depends on, on any WebView older than Chrome 105 (minSdk is 24). */
+ytm-pivot-bar-item-renderer:has(.pivot-shorts) {
     display: none !important;
     visibility: hidden !important;
     pointer-events: none !important;

@@ -10,8 +10,11 @@ captures/
 .cxx/
 *.jks
 *.keystore
+!clearfeed-debug.keystore
 *.apk
 *.aab
 !public/downloads/ClearFeed.apk
 keystore.properties
 /.tooling/
+node_modules/
+package-lock.json
